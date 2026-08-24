@@ -36,12 +36,18 @@ comptime {
     // Ensure we don't cause an identity map conflict. Because _geolocation is
     // lazy and, for now, Zig orders the highest-aligned field first, none of
     // the other fields land at offset 0.
-    for ([_][]const u8{ "_plugins", "_permissions", "_storage", "_ua_data" }) |name| {
+    for ([_][]const u8{ "_plugins", "_mime_types", "_permissions", "_storage", "_ua_data" }) |name| {
         if (@offsetOf(Navigator, name) == 0) @compileError(name ++ " aliases the Navigator");
     }
 }
 
 _plugins: PluginArray = .{},
+// stealthpanda: navigator.mimeTypes + the shared PDF plugin graph, populated
+// only when impersonating (see ensurePdfPlugins).
+_mime_types: PluginArray.MimeTypeArray = .{},
+// align(16) keeps this internal (non-JS-wrapped) field at offset 0 so none of
+// the JS-wrapped sub-objects below alias the Navigator (see the comptime guard).
+_pdf: ?PluginArray.Graph align(16) = null,
 _permissions: Permissions = .{},
 _geolocation: ?*Geolocation = null,
 _storage: StorageManager = .{},
@@ -92,7 +98,9 @@ pub fn getCookieEnabled(_: *const Navigator) bool {
     return true;
 }
 
-pub fn getHardwareConcurrency(_: *const Navigator) u32 {
+pub fn getHardwareConcurrency(_: *const Navigator, exec: *const Execution) u32 {
+    // stealthpanda: a typical desktop Chrome reports 8+; keep 4 off-path.
+    if (exec.session.browser.http_client.impersonateIdentity() != null) return 8;
     return 4;
 }
 
@@ -152,8 +160,25 @@ pub fn sendBeacon(_: *const Navigator, url: js.Value, data: ?js.Value) bool {
     return true;
 }
 
-pub fn getPlugins(self: *Navigator) *PluginArray {
+pub fn getPlugins(self: *Navigator, exec: *const Execution) !*PluginArray {
+    try self.ensurePdfPlugins(exec);
     return &self._plugins;
+}
+
+pub fn getMimeTypes(self: *Navigator, exec: *const Execution) !*PluginArray.MimeTypeArray {
+    try self.ensurePdfPlugins(exec);
+    return &self._mime_types;
+}
+
+// stealthpanda: build Chrome's shared PDF plugin/mimetype graph once, wiring
+// both navigator.plugins and navigator.mimeTypes to it. No-op (arrays stay
+// empty) when not impersonating.
+fn ensurePdfPlugins(self: *Navigator, exec: *const Execution) !void {
+    if (self._pdf != null) return;
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return;
+    self._pdf = try PluginArray.Graph.build(exec);
+    self._plugins._items = self._pdf.?.plugins[0..];
+    self._mime_types._items = self._pdf.?.mimes[0..];
 }
 
 pub fn getPermissions(self: *Navigator) *Permissions {
@@ -284,6 +309,8 @@ pub const JsApi = struct {
 
     // window only
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{ .exposed = .window });
+    // stealthpanda: navigator.mimeTypes (was absent).
+    pub const mimeTypes = bridge.accessor(Navigator.getMimeTypes, null, .{ .exposed = .window });
     pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{ .exposed = .window });
     pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{ .exposed = .window });
     pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .exposed = .window });

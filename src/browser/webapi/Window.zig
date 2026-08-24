@@ -30,6 +30,7 @@ const CSS = @import("CSS.zig");
 const Navigator = @import("Navigator.zig");
 const ModelContext = @import("ModelContext.zig");
 const Screen = @import("Screen.zig");
+const Chrome = @import("Chrome.zig");
 const VisualViewport = @import("VisualViewport.zig");
 const Performance = @import("Performance.zig");
 const Document = @import("Document.zig");
@@ -72,6 +73,8 @@ _crypto: Crypto = .init,
 _console: Console = .init,
 _navigator: Navigator = .init,
 _model_context: ModelContext = .init,
+// stealthpanda: window.chrome, only surfaced when impersonating (getChrome).
+_chrome: Chrome = .{},
 _screen: *Screen,
 _visual_viewport: *VisualViewport,
 _performance: Performance,
@@ -256,6 +259,14 @@ pub fn getModelContext(self: *Window) *ModelContext {
 
 pub fn getScreen(self: *Window) *Screen {
     return self._screen;
+}
+
+// stealthpanda: window.chrome — present only when impersonating a Chromium
+// browser (a Chrome UA with no window.chrome is a loud tell; an honest
+// Lightpanda shouldn't fake it, so this is undefined off-path).
+pub fn getChrome(self: *Window, exec: *const Execution) ?*Chrome {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return &self._chrome;
 }
 
 pub fn setScreen(self: *Window, value: js.Value) void {
@@ -922,6 +933,22 @@ pub fn getInnerHeight(_: *const Window, frame: *Frame) u32 {
     return frame._page.getViewport().height;
 }
 
+// stealthpanda: real browsers always expose the outer window size and screen
+// offsets; headless/from-scratch browsers that omit them are a known tell.
+// outerWidth tracks the viewport; outerHeight adds Chrome's toolbar/tab strip.
+pub fn getOuterWidth(_: *const Window, frame: *Frame) u32 {
+    return frame._page.getViewport().width;
+}
+pub fn getOuterHeight(_: *const Window, frame: *Frame) u32 {
+    return frame._page.getViewport().height + 88;
+}
+pub fn getScreenX(_: *const Window) i32 {
+    return 0;
+}
+pub fn getScreenY(_: *const Window) i32 {
+    return 0;
+}
+
 const ScrollToOpts = union(enum) {
     x: i32,
     opts: Opts,
@@ -1177,6 +1204,8 @@ pub const JsApi = struct {
     pub const navigator = bridge.accessor(Window.getNavigator, null, .{});
     pub const scheduler = bridge.accessor(Window.getScheduler, null, .{});
     pub const screen = bridge.accessor(Window.getScreen, Window.setScreen, .{});
+    // stealthpanda: window.chrome (undefined unless impersonating).
+    pub const chrome = bridge.accessor(Window.getChrome, null, .{ .null_as_undefined = true });
     pub const visualViewport = bridge.accessor(Window.getVisualViewport, Window.setVisualViewport, .{});
     pub const performance = bridge.accessor(Window.getPerformance, Window.setPerformance, .{});
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{});
@@ -1248,6 +1277,13 @@ pub const JsApi = struct {
     // the attribute rather than throwing.
     pub const innerWidth = bridge.accessor(Window.getInnerWidth, Window.setInnerWidth, .{});
     pub const innerHeight = bridge.accessor(Window.getInnerHeight, Window.setInnerHeight, .{});
+    // stealthpanda: outer dimensions + screen offsets (were absent).
+    pub const outerWidth = bridge.accessor(Window.getOuterWidth, null, .{});
+    pub const outerHeight = bridge.accessor(Window.getOuterHeight, null, .{});
+    pub const screenX = bridge.accessor(Window.getScreenX, null, .{});
+    pub const screenY = bridge.accessor(Window.getScreenY, null, .{});
+    pub const screenLeft = bridge.accessor(Window.getScreenX, null, .{});
+    pub const screenTop = bridge.accessor(Window.getScreenY, null, .{});
     pub const devicePixelRatio = bridge.property(1, .{ .template = false, .readonly = false });
 
     pub const opener = bridge.accessor(Window.getOpener, Window.setOpener, .{});
