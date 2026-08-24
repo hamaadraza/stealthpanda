@@ -41,13 +41,15 @@ comptime {
     }
 }
 
+// stealthpanda: the shared PDF plugin/mimetype graph (populated only when
+// impersonating, see ensurePdfPlugins). Declared first, and being an internal
+// (non-JS-wrapped) pointer-holding field it takes offset 0, keeping the
+// JS-wrapped sub-objects below off offset 0 (see the comptime guard). It must
+// not be over-aligned: that would change Navigator's pointer alignment and
+// break the low-bit pointer tagging the identity map relies on.
+_pdf: ?PluginArray.Graph = null,
 _plugins: PluginArray = .{},
-// stealthpanda: navigator.mimeTypes + the shared PDF plugin graph, populated
-// only when impersonating (see ensurePdfPlugins).
 _mime_types: PluginArray.MimeTypeArray = .{},
-// align(16) keeps this internal (non-JS-wrapped) field at offset 0 so none of
-// the JS-wrapped sub-objects below alias the Navigator (see the comptime guard).
-_pdf: ?PluginArray.Graph align(16) = null,
 _permissions: Permissions = .{},
 _geolocation: ?*Geolocation = null,
 _storage: StorageManager = .{},
