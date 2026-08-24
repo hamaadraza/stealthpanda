@@ -74,7 +74,7 @@ pub fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?Draw
     if (self._cached) |cached| {
         const matches = switch (cached) {
             .@"2d" => std.mem.eql(u8, context_type, "2d"),
-            .webgl => std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl"),
+            .webgl => std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl") or std.mem.eql(u8, context_type, "webgl2"),
         };
         return if (matches) cached else null;
     }
@@ -94,8 +94,20 @@ pub fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?Draw
         // catch the throw, reset, re-render, and loop forever.
         // Spec-correct signal for "no WebGL" is null, so apps that check
         // (Three.js does) can degrade gracefully.
-        if (std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl")) {
-            return null;
+        //
+        // stealthpanda: a null WebGL context under a Chrome UA is a strong bot
+        // signal, so when impersonating we return the stub context (it reports
+        // Chrome's GPU via getParameter). We accept the Three.js-breakage
+        // trade-off only in stealth mode; off-path stays null.
+        if (std.mem.eql(u8, context_type, "webgl") or
+            std.mem.eql(u8, context_type, "experimental-webgl") or
+            std.mem.eql(u8, context_type, "webgl2"))
+        {
+            if (frame._session.browser.http_client.impersonateIdentity() == null) {
+                return null;
+            }
+            const ctx = try frame._factory.create(WebGLRenderingContext{});
+            break :blk .{ .webgl = ctx };
         }
         return null;
     };

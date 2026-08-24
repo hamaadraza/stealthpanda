@@ -20,6 +20,7 @@ const std = @import("std");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const Execution = js.Execution;
 
 pub fn registerTypes() []const type {
     return &.{
@@ -32,6 +33,9 @@ pub fn registerTypes() []const type {
 }
 
 const WebGLRenderingContext = @This();
+
+// Zero-state context; the field just gives the factory a non-empty allocation.
+_pad: u8 = 0,
 
 /// On Chrome and Safari, a call to `getSupportedExtensions` returns total of 39.
 /// The reference for it lists lesser number of extensions:
@@ -153,12 +157,34 @@ pub const Extension = union(enum) {
     };
 };
 
-/// This actually takes "GLenum" which, in fact, is a fancy way to say number.
-/// Return value also depends on what's being passed as `pname`; we don't really
-/// support any though.
-pub fn getParameter(_: *const WebGLRenderingContext, pname: u32) []const u8 {
-    _ = pname;
-    return "";
+/// getParameter(GLenum). The return type varies by pname (string / number /
+/// array), so we build a js.Value. stealthpanda: only reachable when
+/// impersonating (getContext returns null otherwise), and reports the same
+/// values a real Chrome does — the vendor/renderer strings especially are a
+/// primary WebGL fingerprint.
+pub fn getParameter(_: *const WebGLRenderingContext, pname: u32, exec: *const Execution) !js.Value {
+    const local = exec.js.local.?;
+    const id = exec.session.browser.http_client.impersonateIdentity();
+    return switch (pname) {
+        0x1F00 => local.zigValueToJs(@as([]const u8, "WebKit"), .{}), // VENDOR
+        0x1F01 => local.zigValueToJs(@as([]const u8, "WebKit WebGL"), .{}), // RENDERER
+        0x1F02 => local.zigValueToJs(@as([]const u8, "WebGL 1.0 (OpenGL ES 2.0 Chromium)"), .{}), // VERSION
+        0x8B8C => local.zigValueToJs(@as([]const u8, "WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)"), .{}), // SHADING_LANGUAGE_VERSION
+        // UNMASKED_VENDOR_WEBGL / UNMASKED_RENDERER_WEBGL — the real GPU strings.
+        0x9245 => local.zigValueToJs(@as([]const u8, if (id) |i| i.webgl_vendor else "Google Inc."), .{}),
+        0x9246 => local.zigValueToJs(@as([]const u8, if (id) |i| i.webgl_renderer else "ANGLE"), .{}),
+        // Common numeric limits (ANGLE Metal on macOS typical values).
+        0x0D33, 0x851C, 0x84E8 => local.zigValueToJs(@as(u32, 16384), .{}), // MAX_TEXTURE / CUBE_MAP / RENDERBUFFER_SIZE
+        0x8869 => local.zigValueToJs(@as(u32, 16), .{}), // MAX_VERTEX_ATTRIBS
+        0x8DFB, 0x8DFD => local.zigValueToJs(@as(u32, 1024), .{}), // MAX_VERTEX/FRAGMENT_UNIFORM_VECTORS
+        0x8DFC => local.zigValueToJs(@as(u32, 30), .{}), // MAX_VARYING_VECTORS
+        0x8872, 0x8B4C => local.zigValueToJs(@as(u32, 16), .{}), // MAX_TEXTURE_IMAGE_UNITS / VERTEX_TEXTURE_IMAGE_UNITS
+        0x8B4D => local.zigValueToJs(@as(u32, 32), .{}), // MAX_COMBINED_TEXTURE_IMAGE_UNITS
+        0x0D3A => local.zigValueToJs(@as([]const i32, &.{ 32767, 32767 }), .{}), // MAX_VIEWPORT_DIMS
+        0x846D => local.zigValueToJs(@as([]const f32, &.{ 1, 1024 }), .{}), // ALIASED_POINT_SIZE_RANGE
+        0x846E => local.zigValueToJs(@as([]const f32, &.{ 1, 1 }), .{}), // ALIASED_LINE_WIDTH_RANGE
+        else => local.zigValueToJs(@as(?u8, null), .{}), // unhandled → null
+    };
 }
 
 /// Enables a WebGL extension.

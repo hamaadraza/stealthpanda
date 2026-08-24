@@ -50,6 +50,11 @@ pub const Identity = struct {
     mobile: bool,
     brands: []const JsBrand,
     full_version_list: []const JsBrand,
+    // WebGL UNMASKED_VENDOR_WEBGL / UNMASKED_RENDERER_WEBGL. Chrome's Mac UA is
+    // frozen at "Intel Mac OS X 10_15_7" on every Mac including Apple Silicon,
+    // so an Apple-Metal renderer is coherent with the macOS identity.
+    webgl_vendor: [:0]const u8,
+    webgl_renderer: [:0]const u8,
 };
 
 // curl-impersonate ships one fixed UA per desktop Chrome target, all on macOS.
@@ -89,6 +94,8 @@ const chrome131 = Identity{
     .mobile = false,
     .brands = &chrome131_brands,
     .full_version_list = &chrome131_fvl,
+    .webgl_vendor = "Google Inc. (Apple)",
+    .webgl_renderer = "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)",
 };
 const chrome136 = Identity{
     .user_agent = mac_ua_prefix ++ "136" ++ mac_ua_suffix,
@@ -102,6 +109,8 @@ const chrome136 = Identity{
     .mobile = false,
     .brands = &chrome136_brands,
     .full_version_list = &chrome136_fvl,
+    .webgl_vendor = "Google Inc. (Apple)",
+    .webgl_renderer = "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)",
 };
 
 /// Identity for a curl-impersonate profile name, or null when we have no
