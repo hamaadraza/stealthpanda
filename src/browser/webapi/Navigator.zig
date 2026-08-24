@@ -29,6 +29,8 @@ const ModelContext = @import("ModelContext.zig");
 const StorageManager = @import("StorageManager.zig");
 const NavigatorUAData = @import("NavigatorUAData.zig");
 const Geolocation = @import("geolocation/Geolocation.zig");
+const NetworkInformation = @import("NetworkInformation.zig");
+const MediaDevices = @import("MediaDevices.zig");
 
 const Navigator = @This();
 
@@ -36,7 +38,7 @@ comptime {
     // Ensure we don't cause an identity map conflict. Because _geolocation is
     // lazy and, for now, Zig orders the highest-aligned field first, none of
     // the other fields land at offset 0.
-    for ([_][]const u8{ "_plugins", "_mime_types", "_permissions", "_storage", "_ua_data" }) |name| {
+    for ([_][]const u8{ "_plugins", "_mime_types", "_connection", "_media_devices", "_permissions", "_storage", "_ua_data" }) |name| {
         if (@offsetOf(Navigator, name) == 0) @compileError(name ++ " aliases the Navigator");
     }
 }
@@ -50,6 +52,9 @@ comptime {
 _pdf: ?PluginArray.Graph = null,
 _plugins: PluginArray = .{},
 _mime_types: PluginArray.MimeTypeArray = .{},
+// stealthpanda: navigator.connection / navigator.mediaDevices (impersonation-gated).
+_connection: NetworkInformation = .{},
+_media_devices: MediaDevices = .{},
 _permissions: Permissions = .{},
 _geolocation: ?*Geolocation = null,
 _storage: StorageManager = .{},
@@ -183,6 +188,19 @@ fn ensurePdfPlugins(self: *Navigator, exec: *const Execution) !void {
     self._mime_types._items = self._pdf.?.mimes[0..];
 }
 
+// stealthpanda: navigator.connection / navigator.mediaDevices — present only
+// when impersonating (undefined otherwise, an honest Lightpanda doesn't fake
+// browser APIs it lacks).
+pub fn getConnection(self: *Navigator, exec: *const Execution) ?*NetworkInformation {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return &self._connection;
+}
+
+pub fn getMediaDevices(self: *Navigator, exec: *const Execution) ?*MediaDevices {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return &self._media_devices;
+}
+
 pub fn getPermissions(self: *Navigator) *Permissions {
     return &self._permissions;
 }
@@ -313,6 +331,9 @@ pub const JsApi = struct {
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{ .exposed = .window });
     // stealthpanda: navigator.mimeTypes (was absent).
     pub const mimeTypes = bridge.accessor(Navigator.getMimeTypes, null, .{ .exposed = .window });
+    // stealthpanda: navigator.connection / navigator.mediaDevices (undefined off-path).
+    pub const connection = bridge.accessor(Navigator.getConnection, null, .{ .null_as_undefined = true });
+    pub const mediaDevices = bridge.accessor(Navigator.getMediaDevices, null, .{ .null_as_undefined = true });
     pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{ .exposed = .window });
     pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{ .exposed = .window });
     pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .exposed = .window });
