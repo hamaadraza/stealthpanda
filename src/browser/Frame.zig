@@ -1145,6 +1145,13 @@ pub fn _documentIsLoaded(self: *Frame) !void {
         .loader_id = self._loader_id,
         .timestamp = lp.datetime.timestamp(.boot),
     });
+
+    // stealthpanda: drive synthetic mouse movement so behavioral headless
+    // checks (and bot sensors that score pointer entropy) see a live pointer.
+    // Main frame only, and only when impersonating.
+    if (self._type == .root and self._session.browser.http_client.impersonateIdentity() != null) {
+        @import("../stealthpanda/behavior.zig").startMouseMovement(self);
+    }
 }
 
 // Fired at the document on every change to document.readyState: before

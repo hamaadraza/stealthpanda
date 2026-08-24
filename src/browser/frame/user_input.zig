@@ -118,6 +118,32 @@ pub fn triggerMouseMove(frame: *Frame, x: f64, y: f64) !void {
     try frame._event_manager.dispatch(target.asEventTarget(), enter_event.asEvent());
 }
 
+// stealthpanda: dispatch a single mousemove carrying relative motion
+// (movementX/Y). Used by the synthetic mouse-movement driver so behavioral
+// headless checks see a live, moving pointer. Falls back to <body> when the
+// faux-layout elementFromPoint misses, so the move still reaches document/
+// window/body listeners.
+pub fn triggerMouseMoveDelta(frame: *Frame, x: f64, y: f64, mx: f64, my: f64) !void {
+    const HTMLDocument = @import("../webapi/HTMLDocument.zig");
+    const doc = frame.window._document;
+    const target = (try doc.elementFromPoint(x, y, frame)) orelse blk: {
+        if (doc.is(HTMLDocument)) |html_doc| {
+            if (html_doc.getBody()) |body| break :blk body.asElement();
+        }
+        return;
+    };
+    const move_event: *MouseEvent = try .initTrusted(comptime .wrap("mousemove"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .clientX = x,
+        .clientY = y,
+        .movementX = mx,
+        .movementY = my,
+    }, frame);
+    try frame._event_manager.dispatch(target.asEventTarget(), move_event.asEvent());
+}
+
 pub fn triggerMouseRelease(frame: *Frame, x: f64, y: f64, button: i32, click_count: i32) !void {
     const target = (try frame.window._document.elementFromPoint(x, y, frame)) orelse return;
     if (comptime lp.IS_DEBUG) {

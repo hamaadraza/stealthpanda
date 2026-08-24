@@ -59,6 +59,10 @@ _button: i16,
 _buttons: u16,
 _client_x: f64,
 _client_y: f64,
+// Relative pointer motion since the last event. Real browsers always expose
+// these on mouse events; their absence is a headless tell.
+_movement_x: f64 = 0,
+_movement_y: f64 = 0,
 _ctrl_key: bool,
 _meta_key: bool,
 // https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/relatedTarget
@@ -75,6 +79,8 @@ pub const MouseEventOptions = struct {
     clientY: f64 = 0.0,
     ctrlKey: bool = false,
     metaKey: bool = false,
+    movementX: f64 = 0.0,
+    movementY: f64 = 0.0,
     relatedTarget: ?*EventTarget = null,
     screenX: f64 = 0.0,
     screenY: f64 = 0.0,
@@ -112,6 +118,8 @@ fn initWithTrusted(arena: *lp.Arena, typ: String, _opts: ?Options, trusted: bool
             ._screen_y = opts.screenY,
             ._client_x = opts.clientX,
             ._client_y = opts.clientY,
+            ._movement_x = opts.movementX,
+            ._movement_y = opts.movementY,
             ._ctrl_key = opts.ctrlKey,
             ._shift_key = opts.shiftKey,
             ._alt_key = opts.altKey,
@@ -162,6 +170,14 @@ pub fn getClientX(self: *const MouseEvent) f64 {
 
 pub fn getClientY(self: *const MouseEvent) f64 {
     return self._client_y;
+}
+
+pub fn getMovementX(self: *const MouseEvent) f64 {
+    return self._movement_x;
+}
+
+pub fn getMovementY(self: *const MouseEvent) f64 {
+    return self._movement_y;
 }
 
 pub fn getCtrlKey(self: *const MouseEvent) bool {
@@ -273,6 +289,8 @@ pub const JsApi = struct {
     pub const buttons = bridge.accessor(getButtons, null, .{});
     pub const clientX = bridge.accessor(getClientX, null, .{});
     pub const clientY = bridge.accessor(getClientY, null, .{});
+    pub const movementX = bridge.accessor(getMovementX, null, .{});
+    pub const movementY = bridge.accessor(getMovementY, null, .{});
     pub const ctrlKey = bridge.accessor(getCtrlKey, null, .{});
     pub const metaKey = bridge.accessor(getMetaKey, null, .{});
     pub const offsetX = bridge.property(0.0, .{ .template = false });
