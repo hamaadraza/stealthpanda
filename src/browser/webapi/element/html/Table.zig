@@ -25,6 +25,78 @@ pub fn getTBodies(self: *Table, frame: *Frame) collections.NodeLive(.child_tag) 
     return collections.NodeLive(.child_tag).init(self.asNode(), .tbody, frame);
 }
 
+// HTMLTableElement.insertRow(index=-1): creates a <tr>, inserts it, returns it.
+// index -1 or == rows.length appends to the last tbody (creating one if the
+// table has none, per spec). Previously unimplemented — pages that build tables
+// dynamically (table.insertRow()) threw, which is itself a non-Chrome tell.
+pub fn insertRow(self: *Table, index_: ?i32, frame: *Frame) !*Node {
+    const num = self.rowCount();
+    const index = index_ orelse -1;
+    if (index < -1 or index > num) {
+        return error.IndexSizeError;
+    }
+    const tr = try Frame.node_factory.createElementNS(frame, .html, "tr", null);
+    if (index == -1 or index == num) {
+        const section = try self.lastTbodyOrCreate(frame);
+        _ = try section.appendChild(tr, frame);
+    } else {
+        const ref = self.findRow(index).?;
+        _ = try ref.parentNode().?.insertBefore(tr, ref, frame);
+    }
+    return tr;
+}
+
+fn lastTbodyOrCreate(self: *Table, frame: *Frame) !*Node {
+    var last: ?*Node = null;
+    var it = self.asNode().childrenIterator();
+    while (it.next()) |child| {
+        const el = child.is(Element) orelse continue;
+        if (el.getTag() == .tbody) last = child;
+    }
+    if (last) |tb| {
+        return tb;
+    }
+    const tbody = try Frame.node_factory.createElementNS(frame, .html, "tbody", null);
+    _ = try self.asNode().appendChild(tbody, frame);
+    return tbody;
+}
+
+fn rowCount(self: *Table) i32 {
+    var n: i32 = 0;
+    n += self.sectionRowCount(.thead);
+    var it = self.asNode().childrenIterator();
+    while (it.next()) |child| {
+        const el = child.is(Element) orelse continue;
+        switch (el.getTag()) {
+            .tr => n += 1,
+            .tbody => n += trChildCount(child),
+            else => {},
+        }
+    }
+    n += self.sectionRowCount(.tfoot);
+    return n;
+}
+
+fn sectionRowCount(self: *Table, tag: Element.Tag) i32 {
+    var n: i32 = 0;
+    var it = self.asNode().childrenIterator();
+    while (it.next()) |child| {
+        const el = child.is(Element) orelse continue;
+        if (el.getTag() == tag) n += trChildCount(child);
+    }
+    return n;
+}
+
+fn trChildCount(section: *Node) i32 {
+    var n: i32 = 0;
+    var it = section.childrenIterator();
+    while (it.next()) |child| {
+        const el = child.is(Element) orelse continue;
+        if (el.getTag() == .tr) n += 1;
+    }
+    return n;
+}
+
 pub fn deleteRow(self: *Table, index: i32, frame: *Frame) !void {
     if (index < -1) {
         return error.IndexSizeError;
@@ -134,6 +206,7 @@ pub const JsApi = struct {
     pub const @"align" = reflect.string("align");
 
     pub const tBodies = bridge.accessor(Table.getTBodies, null, .{});
+    pub const insertRow = bridge.function(Table.insertRow, .{ .ce_reactions = true });
     pub const deleteRow = bridge.function(Table.deleteRow, .{ .ce_reactions = true });
 };
 

@@ -25,6 +25,49 @@ pub fn getCells(self: *TableRow, frame: *Frame) collections.NodeLive(.cells) {
     return collections.NodeLive(.cells).init(self.asNode(), {}, frame);
 }
 
+// HTMLTableRowElement.insertCell(index=-1): creates a <td>, inserts it, returns
+// it. index -1 or == cells.length appends. Previously unimplemented.
+pub fn insertCell(self: *TableRow, index_: ?i32, frame: *Frame) !*Node {
+    const num = self.cellCount();
+    const index = index_ orelse -1;
+    if (index < -1 or index > num) {
+        return error.IndexSizeError;
+    }
+    const td = try Frame.node_factory.createElementNS(frame, .html, "td", null);
+    if (index == -1 or index == num) {
+        _ = try self.asNode().appendChild(td, frame);
+    } else {
+        const ref = self.nthCell(index).?;
+        _ = try self.asNode().insertBefore(td, ref, frame);
+    }
+    return td;
+}
+
+fn cellCount(self: *TableRow) i32 {
+    var n: i32 = 0;
+    var it = self.asNode().childrenIterator();
+    while (it.next()) |child| {
+        const el = child.is(Element) orelse continue;
+        const tag = el.getTag();
+        if (tag == .td or tag == .th) n += 1;
+    }
+    return n;
+}
+
+fn nthCell(self: *TableRow, index: i32) ?*Node {
+    var n: i32 = 0;
+    var it = self.asNode().childrenIterator();
+    while (it.next()) |child| {
+        const el = child.is(Element) orelse continue;
+        const tag = el.getTag();
+        if (tag == .td or tag == .th) {
+            if (n == index) return child;
+            n += 1;
+        }
+    }
+    return null;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(TableRow);
 
@@ -42,4 +85,5 @@ pub const JsApi = struct {
     pub const @"align" = reflect.string("align");
 
     pub const cells = bridge.accessor(TableRow.getCells, null, .{});
+    pub const insertCell = bridge.function(TableRow.insertCell, .{ .ce_reactions = true });
 };
