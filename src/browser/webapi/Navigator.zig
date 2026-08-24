@@ -69,7 +69,14 @@ pub fn getAppCodeName(_: *const Navigator) []const u8 {
     return "Mozilla";
 }
 
-pub fn getAppVersion(_: *const Navigator) []const u8 {
+pub fn getAppVersion(_: *const Navigator, exec: *const Execution) []const u8 {
+    // stealthpanda: appVersion is the User-Agent with the "Mozilla/" prefix
+    // removed. Keep the legacy "1.0" when not impersonating.
+    if (exec.session.browser.http_client.impersonateIdentity()) |id| {
+        const prefix = "Mozilla/";
+        if (std.mem.startsWith(u8, id.user_agent, prefix)) return id.user_agent[prefix.len..];
+        return id.user_agent;
+    }
     return "1.0";
 }
 
@@ -97,7 +104,9 @@ pub fn getMaxTouchPoints(_: *const Navigator) u32 {
     return 0;
 }
 
-pub fn getVendor(_: *const Navigator) []const u8 {
+pub fn getVendor(_: *const Navigator, exec: *const Execution) []const u8 {
+    // stealthpanda: Chrome reports "Google Inc."; empty otherwise (Firefox-like).
+    if (exec.session.browser.http_client.impersonateIdentity()) |id| return id.vendor;
     return "";
 }
 
@@ -118,7 +127,10 @@ pub fn getGlobalPrivacyControl(_: *const Navigator) bool {
     return false;
 }
 
-pub fn getPlatform(_: *const Navigator) []const u8 {
+pub fn getPlatform(_: *const Navigator, exec: *const Execution) []const u8 {
+    // stealthpanda: match the impersonated OS (navigator.platform, e.g.
+    // "MacIntel"), else fall back to the build target.
+    if (exec.session.browser.http_client.impersonateIdentity()) |id| return id.platform;
     return switch (builtin.os.tag) {
         .macos => "MacIntel",
         .windows => "Win32",

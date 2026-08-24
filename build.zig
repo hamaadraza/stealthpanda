@@ -81,6 +81,17 @@ pub fn build(b: *Build) !void {
         (dev_fast or (prebuilt_v8_path != null and std.mem.endsWith(u8, prebuilt_v8_path.?, ".so")));
     const use_llvm = b.option(bool, "use_llvm", "Use the LLVM backend") orelse !dev_fast;
 
+    // stealthpanda: link the prebuilt curl-impersonate archive (Chrome/Safari/
+    // Firefox TLS + HTTP/2 fingerprints) instead of the from-source libcurl.
+    // Default on for this fork. `make download-curl-impersonate` caches the
+    // archive; build.zig discovers it the same way it discovers prebuilt V8.
+    const tls_impersonate = b.option(bool, "tls_impersonate", "Link curl-impersonate for browser TLS/HTTP2 fingerprints (stealthpanda fork feature)") orelse true;
+    const curl_impersonate_dir = if (tls_impersonate) findCurlImpersonate(b, target) else null;
+    if (tls_impersonate and curl_impersonate_dir == null) {
+        // findCurlImpersonate already printed where it looked and how to fix it.
+        return error.CurlImpersonateMissing;
+    }
+
     const version = resolveVersion(b);
     std.debug.print("Lightpanda {f}\n", .{version});
 
@@ -92,6 +103,7 @@ pub fn build(b: *Build) !void {
     opts.addOption([]const u8, "version_encoded", version_encoded);
     opts.addOption(?[]const u8, "snapshot_path", snapshot_path);
     opts.addOption(bool, "wpt_extensions", wpt_extensions);
+    opts.addOption(bool, "tls_impersonate", tls_impersonate);
 
     const lightpanda_module = b.addModule("lightpanda", .{
         .root_source_file = b.path("src/lightpanda.zig"),
@@ -114,7 +126,7 @@ pub fn build(b: *Build) !void {
     b.default_step.dependOn(fmt_step);
 
     linkV8(b, lightpanda_module, enable_asan, enable_tsan, prebuilt_v8_path, shared_v8);
-    linkCurl(b, lightpanda_module, enable_tsan);
+    linkCurl(b, lightpanda_module, enable_tsan, curl_impersonate_dir);
     linkHtml5Ever(b, lightpanda_module);
     linkZenai(b, lightpanda_module);
     linkIsocline(b, lightpanda_module);
@@ -419,7 +431,14 @@ fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is
     mod.addImport("sqlite3", translate_c.createModule());
 }
 
-fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) void {
+fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool, impersonate_dir: ?[]const u8) void {
+    // stealthpanda: the prebuilt curl-impersonate archive replaces the whole
+    // from-source curl + BoringSSL + nghttp2 + zlib + brotli stack.
+    if (impersonate_dir) |dir| {
+        linkCurlImpersonate(b, mod, dir);
+        return;
+    }
+
     const target = mod.resolved_target.?;
 
     const curl = buildCurl(b, target, mod.optimize.?, is_tsan);
@@ -452,6 +471,90 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) void {
         mod.linkFramework("CoreFoundation", .{});
         mod.linkFramework("SystemConfiguration", .{});
     }
+}
+
+/// stealthpanda: link the prebuilt curl-impersonate archive extracted under
+/// `dir` (see findCurlImpersonate). The archive is a single self-contained
+/// object bundling patched curl + BoringSSL + nghttp2 + brotli + zlib, so it
+/// is linked alone: it satisfies both libcurl and the libcrypto symbols
+/// src/sys/libcrypto.zig needs. Linking a separate BoringSSL as well would
+/// duplicate ~1500 SSL/EVP/X509 symbols.
+fn linkCurlImpersonate(b: *Build, mod: *Build.Module, dir: []const u8) void {
+    const target = mod.resolved_target.?;
+
+    const archive = b.pathJoin(&.{ dir, "libcurl-impersonate.a" });
+    mod.addObjectFile(.{ .cwd_relative = archive });
+
+    // translate_c must read the impersonate headers so curl_easy_impersonate
+    // and the new CURLOPT_* options are visible from Zig.
+    const include = b.pathJoin(&.{ dir, "include" });
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ include, "curl", "curl.h" }) },
+        .target = target,
+        .optimize = mod.optimize.?,
+    });
+    translate_c.addIncludePath(.{ .cwd_relative = include });
+    mod.addImport("curl", translate_c.createModule());
+
+    if (target.result.os.tag == .macos) {
+        // needed for proxying on mac
+        mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
+        mod.linkFramework("CoreFoundation", .{});
+        mod.linkFramework("SystemConfiguration", .{});
+    }
+}
+
+/// stealthpanda: locate the curl-impersonate archive that
+/// `make download-curl-impersonate` caches. The release tag lives in
+/// src/stealthpanda/curl-impersonate.version — the single source of truth the
+/// Makefile reads too — so the two cannot drift.
+fn findCurlImpersonate(b: *Build, target: Build.ResolvedTarget) ?[]const u8 {
+    const io = b.graph.io;
+    const raw = std.Io.Dir.cwd().readFileAlloc(
+        io,
+        b.pathFromRoot("src/stealthpanda/curl-impersonate.version"),
+        b.allocator,
+        .limited(256),
+    ) catch return null;
+    const tag = std.mem.trim(u8, raw, " \r\n\t");
+    if (tag.len == 0) {
+        return null;
+    }
+
+    const triple = curlImpersonateTriple(target) orelse {
+        std.debug.print("No curl-impersonate asset for {s}-{s}; build with -Dtls_impersonate=false to use the stock TLS stack.\n", .{
+            @tagName(target.result.cpu.arch),
+            @tagName(target.result.os.tag),
+        });
+        return null;
+    };
+
+    const dir = b.pathJoin(&.{ b.pathFromRoot(".lp-cache"), "curl-impersonate", tag, triple });
+    const archive = b.pathJoin(&.{ dir, "libcurl-impersonate.a" });
+    std.Io.Dir.cwd().access(io, archive, .{}) catch {
+        std.debug.print("No curl-impersonate at {s}; run `make download-curl-impersonate` (or build with -Dtls_impersonate=false to use the stock TLS stack).\n", .{archive});
+        return null;
+    };
+    std.debug.print("Using curl-impersonate: {s}\n", .{dir});
+    return dir;
+}
+
+/// Maps a Zig target to the curl-impersonate release asset triple. Must stay
+/// in sync with the Makefile's CI_TRIPLE mapping.
+fn curlImpersonateTriple(target: Build.ResolvedTarget) ?[]const u8 {
+    return switch (target.result.os.tag) {
+        .macos => switch (target.result.cpu.arch) {
+            .aarch64 => "arm64-macos",
+            .x86_64 => "x86_64-macos",
+            else => null,
+        },
+        .linux => switch (target.result.cpu.arch) {
+            .aarch64 => "aarch64-linux-gnu",
+            .x86_64 => "x86_64-linux-gnu",
+            else => null,
+        },
+        else => null,
+    };
 }
 
 fn cLibModule(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) *Build.Module {

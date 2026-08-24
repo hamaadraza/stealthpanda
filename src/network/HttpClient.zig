@@ -32,6 +32,8 @@ const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
 
 const http = @import("http.zig");
 const Network = @import("Network.zig");
+const stealth_identity = @import("../stealthpanda/identity.zig");
+const chrome_headers = @import("../stealthpanda/headers.zig");
 const Cache = @import("cache/Cache.zig");
 const RobotsGate = @import("RobotsGate.zig");
 const UrlBlocklist = @import("UrlBlocklist.zig");
@@ -414,16 +416,35 @@ pub fn getUserAgent(self: *const Client) [:0]const u8 {
     return self.user_agent_override orelse self.network.config.http_headers.user_agent;
 }
 
-// Headers _all_ requests include.
-pub fn baselineHeaders(self: *const Client) [4]Transfer.RequestHeader {
-    return .{
-        .{ .name = "User-Agent", .value = self.getUserAgent() },
-        .{ .name = "Sec-Ch-Ua", .value = lp.Config.HttpHeaders.sec_ch_ua, .source = .fixed },
-        .{ .name = "Sec-Ch-Ua-Full-Version-List", .value = lp.Config.HttpHeaders.sec_ch_ua_full_version_list, .source = .fixed },
+// stealthpanda: active browser identity (--tls-impersonate), or null when
+// impersonation is off or no profile matched. Read by the navigator.* getters
+// so the JS layer stays coherent with the TLS fingerprint and these headers.
+pub fn impersonateIdentity(self: *const Client) ?stealth_identity.Identity {
+    return self.network.config.http_headers.impersonate;
+}
+
+// Headers _all_ requests include. The set varies (Chrome sends different
+// client hints than our default identity), so unused slots are left with an
+// empty name and skipped by seedHeaders.
+pub fn baselineHeaders(self: *const Client) [6]Transfer.RequestHeader {
+    var out = [_]Transfer.RequestHeader{.{ .name = "", .value = "" }} ** 6;
+    out[0] = .{ .name = "User-Agent", .value = self.getUserAgent() };
+    if (self.impersonateIdentity()) |id| {
+        // Chrome sends the low-entropy hints (sec-ch-ua, -mobile, -platform) on
+        // every request and the full-version list only after an Accept-CH
+        // opt-in, so we match that rather than always sending the full list.
+        out[1] = .{ .name = "Sec-Ch-Ua", .value = id.sec_ch_ua, .source = .fixed };
+        out[2] = .{ .name = "Sec-Ch-Ua-Mobile", .value = id.sec_ch_ua_mobile, .source = .fixed };
+        out[3] = .{ .name = "Sec-Ch-Ua-Platform", .value = id.sec_ch_ua_platform, .source = .fixed };
+        out[4] = .{ .name = "Accept-Language", .value = lp.Config.HttpHeaders.accept_language };
+    } else {
+        out[1] = .{ .name = "Sec-Ch-Ua", .value = lp.Config.HttpHeaders.sec_ch_ua, .source = .fixed };
+        out[2] = .{ .name = "Sec-Ch-Ua-Full-Version-List", .value = lp.Config.HttpHeaders.sec_ch_ua_full_version_list, .source = .fixed };
         // Omitting Accept-Language triggers bot-protection on some CDNs
         // (Akamai) when Accept-Encoding is present.
-        .{ .name = "Accept-Language", .value = lp.Config.HttpHeaders.accept_language },
-    };
+        out[3] = .{ .name = "Accept-Language", .value = lp.Config.HttpHeaders.accept_language };
+    }
+    return out;
 }
 
 pub fn abort(self: *Client) void {
@@ -2638,6 +2659,70 @@ pub const Transfer = struct {
         }
     }
 
+    // stealthpanda: rewrite req_headers to look like Chrome when impersonating
+    // — inject the browser-managed headers Chrome sends that Lightpanda omits
+    // (Sec-Fetch-*, Upgrade-Insecure-Requests, Priority) and swap in Chrome's
+    // Accept, then reorder into Chrome's canonical header order. Wire order ==
+    // req_headers order (see configureConn), so the sort here is what fixes the
+    // on-the-wire order. No-op when impersonation is off.
+    fn chromeizeHeaders(self: *Transfer) !void {
+        if (self.client.impersonateIdentity() == null) return;
+
+        const kind: chrome_headers.Kind = switch (self.req.resource_type) {
+            .document => .document,
+            .script => .script,
+            .stylesheet => .stylesheet,
+            .xhr, .fetch => .xhr_fetch,
+            .eventsource => .eventsource,
+        };
+
+        // Accept: replace Lightpanda's short value with Chrome's. An author-set
+        // Accept (higher source) still wins via setHeader's layering.
+        if (chrome_headers.accept(kind)) |a| {
+            try self.setHeader("Accept", a, .{ .source = .user_agent });
+        }
+
+        // Fetch metadata + navigation-only headers. .fixed: these are
+        // forbidden-name headers a browser sets and script cannot override.
+        try self.setHeader("Sec-Fetch-Site", self.secFetchSite().header(), .{ .source = .fixed });
+        try self.setHeader("Sec-Fetch-Mode", chrome_headers.secFetchMode(kind), .{ .source = .fixed });
+        try self.setHeader("Sec-Fetch-Dest", chrome_headers.secFetchDest(kind), .{ .source = .fixed });
+        if (kind == .document) {
+            try self.setHeader("Upgrade-Insecure-Requests", "1", .{ .source = .fixed });
+            try self.setHeader("Sec-Fetch-User", "?1", .{ .source = .fixed });
+        }
+        try self.setHeader("Priority", chrome_headers.priority(kind), .{ .source = .fixed });
+        // Explicit Accept-Encoding so it lands in Chrome's position; curl still
+        // decodes the response (CURLOPT_ACCEPT_ENCODING="" is set in http.zig).
+        try self.setHeader("Accept-Encoding", chrome_headers.accept_encoding, .{ .source = .fixed });
+
+        std.sort.insertion(RequestHeader, self.req_headers.items, {}, lessThanCanonical);
+    }
+
+    fn lessThanCanonical(_: void, a: RequestHeader, b: RequestHeader) bool {
+        return chrome_headers.orderIndex(a.name) < chrome_headers.orderIndex(b.name);
+    }
+
+    // Sec-Fetch-Site: the initiator↔target relationship. A top-level navigation
+    // uses the Referer's origin (none when absent, e.g. a typed/CLI navigation);
+    // subresources use the document origin (cookie_origin).
+    fn secFetchSite(self: *Transfer) chrome_headers.Site {
+        const req = &self.req;
+        const arena = self.arena.allocator();
+        const initiator: ?[]const u8 = blk: {
+            if (req.resource_type == .document) {
+                const ref = self.findRequestHeader("referer") orelse break :blk null;
+                const refz = arena.dupeZ(u8, ref) catch break :blk null;
+                break :blk (URL.getOrigin(arena, refz) catch null);
+            }
+            break :blk if (req.cookie_origin.len == 0) null else req.cookie_origin;
+        };
+        const origin = initiator orelse return .none;
+        if (URL.isSameOrigin(req.url, origin)) return .same_origin;
+        if (chrome_headers.sameSite(URL.getHostname(req.url), URL.getHostname(origin))) return .same_site;
+        return .cross_site;
+    }
+
     fn configureConn(self: *Transfer, conn: *http.Connection) anyerror!void {
         const client = self.client;
         const req = &self.req;
@@ -2660,6 +2745,11 @@ pub const Transfer = struct {
         // attempt so redirect/auth retries pick up mutations and never
         // accumulate duplicates.
         conn.clearHeaders();
+        // stealthpanda: when impersonating, add the Chrome request headers
+        // (Sec-Fetch-*, Upgrade-Insecure-Requests, Priority, real Accept) and
+        // reorder into Chrome's header order — before the slist is built, since
+        // wire order == req_headers order. No-op when impersonation is off.
+        try self.chromeizeHeaders();
         const arena = self.arena.allocator();
         for (self.req_headers.items) |hdr| {
             try conn.addHeader(arena, hdr.name, hdr.value);
@@ -2971,7 +3061,10 @@ pub const Transfer = struct {
 
     // The client's baseline headers, added to every request at creation.
     fn seedHeaders(self: *Transfer) !void {
-        for (self.client.baselineHeaders()) |hdr| {
+        const baseline = self.client.baselineHeaders();
+        for (baseline) |hdr| {
+            // Unused slots (see baselineHeaders) carry an empty name.
+            if (hdr.name.len == 0) continue;
             try self.addHeader(hdr.name, hdr.value, .{ .source = hdr.source });
         }
 

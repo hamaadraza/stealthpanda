@@ -226,6 +226,9 @@ const CommonOptions = .{
     .{ .name = "http_max_response_size", .type = ?usize },
     .{ .name = "ws_max_concurrent", .type = ?u8 },
     .{ .name = "insecure_disable_tls_host_verification", .type = bool },
+    // stealthpanda: curl-impersonate browser profile (e.g. chrome131). Only
+    // effective in a -Dtls_impersonate build; "off" disables it for the run.
+    .{ .name = "tls_impersonate", .type = ?[:0]const u8 },
     .{ .name = "log_level", .type = ?log.Level, .validator = logLevelValidator },
     .{ .name = "log_format", .type = ?log.Format },
     .{ .name = "log_filter_scopes", .type = log.FilterRule, .multiple = true, .validator = logFilterScopesValidator },
@@ -493,6 +496,22 @@ pub fn obeyRobots(self: *const Config) bool {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.obey_robots,
         else => unreachable,
     };
+}
+
+/// The curl-impersonate browser profile to emulate for this run, or null when
+/// impersonation is off — either not compiled in (`-Dtls_impersonate=false`)
+/// or turned off at runtime (`--tls-impersonate off`). stealthpanda fork
+/// feature; see src/stealthpanda/impersonate.zig.
+pub fn tlsImpersonate(self: *const Config) ?[:0]const u8 {
+    const impersonate = @import("stealthpanda/impersonate.zig");
+    if (comptime !impersonate.enabled) return null;
+    const configured: ?[:0]const u8 = switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.tls_impersonate,
+        else => null,
+    };
+    const profile = configured orelse impersonate.default_profile;
+    if (impersonate.isDisabled(profile)) return null;
+    return profile;
 }
 
 pub fn disableSubframes(self: *const Config) bool {
@@ -878,6 +897,9 @@ pub const WaitUntil = enum {
     done,
 };
 
+/// stealthpanda: browser identity profiles for the --tls-impersonate feature.
+const stealth_identity = @import("stealthpanda/identity.zig");
+
 /// HTTP header values shared across Http and Client.
 /// Must be initialized with an allocator that outlives all HTTP connections.
 pub const HttpHeaders = struct {
@@ -927,14 +949,40 @@ pub const HttpHeaders = struct {
 
     proxy_bearer_header: ?[:0]const u8,
 
+    /// stealthpanda: active browser identity when --tls-impersonate selects a
+    /// profile we can render, else null (Lightpanda defaults). Read by the
+    /// navigator.* getters and HttpClient.baselineHeaders so every identity
+    /// surface stays coherent with the TLS fingerprint.
+    impersonate: ?stealth_identity.Identity = null,
+
+    /// Whether `user_agent` was heap-allocated by init (an impersonation UA is
+    /// a static string and must not be freed).
+    user_agent_owned: bool = false,
+
     pub fn init(allocator: Allocator, config: *const Config) !HttpHeaders {
-        const user_agent: [:0]const u8 = if (config.userAgent()) |ua|
-            try allocator.dupeZ(u8, ua)
-        else if (config.userAgentSuffix()) |suffix|
-            try std.fmt.allocPrintSentinel(allocator, "{s} {s}", .{ user_agent_base, suffix }, 0)
+        // stealthpanda: when impersonating a browser we have a profile for, the
+        // identity owns the User-Agent (and client hints) so they match the TLS
+        // fingerprint; an explicit --user-agent/--user-agent-suffix applies only
+        // when not impersonating.
+        const impersonate: ?stealth_identity.Identity = if (config.tlsImpersonate()) |profile|
+            stealth_identity.forProfile(profile)
         else
-            user_agent_base;
-        errdefer if (config.userAgent() != null or config.userAgentSuffix() != null) allocator.free(user_agent);
+            null;
+
+        var user_agent_owned = false;
+        const user_agent: [:0]const u8 = blk: {
+            if (impersonate) |id| break :blk id.user_agent;
+            if (config.userAgent()) |ua| {
+                user_agent_owned = true;
+                break :blk try allocator.dupeZ(u8, ua);
+            }
+            if (config.userAgentSuffix()) |suffix| {
+                user_agent_owned = true;
+                break :blk try std.fmt.allocPrintSentinel(allocator, "{s} {s}", .{ user_agent_base, suffix }, 0);
+            }
+            break :blk user_agent_base;
+        };
+        errdefer if (user_agent_owned) allocator.free(user_agent);
 
         const proxy_bearer_header: ?[:0]const u8 = if (config.proxyBearerToken()) |token|
             try std.fmt.allocPrintSentinel(allocator, "Proxy-Authorization: Bearer {s}", .{token}, 0)
@@ -943,7 +991,9 @@ pub const HttpHeaders = struct {
 
         return .{
             .user_agent = user_agent,
+            .user_agent_owned = user_agent_owned,
             .proxy_bearer_header = proxy_bearer_header,
+            .impersonate = impersonate,
         };
     }
 
@@ -951,7 +1001,7 @@ pub const HttpHeaders = struct {
         if (self.proxy_bearer_header) |hdr| {
             allocator.free(hdr);
         }
-        if (self.user_agent.ptr != user_agent_base.ptr) {
+        if (self.user_agent_owned) {
             allocator.free(self.user_agent);
         }
     }

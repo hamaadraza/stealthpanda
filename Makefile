@@ -58,6 +58,26 @@ V8_SO_ASSET := libc_v8_$(V8_VERSION)_$(OS)_$(ARCH).so
 V8_SO_CACHE := .lp-cache/prebuilt-v8/$(ZIG_V8_TAG)/libc_v8.so
 
 
+# Prebuilt curl-impersonate (stealthpanda fork: browser TLS/HTTP2 fingerprints)
+# -----------
+# The release tag is the single source of truth in
+# src/stealthpanda/curl-impersonate.version; build.zig reads the same file so
+# the two can't drift. CI_TRIPLE mirrors curlImpersonateTriple() in build.zig.
+CI_TAG := $(shell cat src/stealthpanda/curl-impersonate.version)
+ifeq ($(OS),macos)
+ifeq ($(ARCH),aarch64)
+	CI_TRIPLE := arm64-macos
+else
+	CI_TRIPLE := x86_64-macos
+endif
+else
+	CI_TRIPLE := $(ARCH)-linux-gnu
+endif
+CI_ARCHIVE := libcurl-impersonate-$(CI_TAG).$(CI_TRIPLE).tar.gz
+CI_DIR     := .lp-cache/curl-impersonate/$(CI_TAG)/$(CI_TRIPLE)
+CI_MARKER  := $(CI_DIR)/libcurl-impersonate.a
+
+
 # Infos
 # -----
 .PHONY: help
@@ -77,7 +97,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-v8-snapshot build-dev download-v8 run run-release test bench data end2end clean
+.PHONY: build build-v8-snapshot build-dev download-v8 download-curl-impersonate download-deps run run-release test bench data end2end clean
 
 ## Download the prebuilt V8 libraries (skips the 10+ min source build)
 download-v8:
@@ -97,8 +117,23 @@ ifeq ($(OS)_$(ARCH),linux_x86_64)
 	@printf "\033[33mShared V8 ready: %s\033[0m\n" "$(V8_SO_CACHE)"
 endif
 
+## Download the prebuilt curl-impersonate library (stealthpanda TLS stealth)
+download-curl-impersonate:
+	@mkdir -p $(CI_DIR)
+	@test -f $(CI_MARKER) || ( \
+		printf "\033[36mDownloading curl-impersonate $(CI_TAG) ($(CI_TRIPLE))...\033[0m\n"; \
+		curl -fL --progress-bar -o $(CI_DIR)/pkg.tar.gz \
+			https://github.com/lexiforest/curl-impersonate/releases/download/$(CI_TAG)/$(CI_ARCHIVE) \
+		&& tar xzf $(CI_DIR)/pkg.tar.gz -C $(CI_DIR) \
+		&& rm -f $(CI_DIR)/pkg.tar.gz \
+		|| (rm -rf $(CI_DIR); printf "\033[33mDownload ERROR\033[0m\n"; exit 1) )
+	@printf "\033[33mcurl-impersonate ready: %s\033[0m\n" "$(CI_MARKER)"
+
+## Download every prebuilt dependency (V8 + curl-impersonate)
+download-deps: download-v8 download-curl-impersonate
+
 ## Build v8 snapshot
-build-v8-snapshot:
+build-v8-snapshot: download-curl-impersonate
 	@printf "\033[36mBuilding v8 snapshot (release safe)...\033[0m\n"
 	@$(ZIG) build $(ZIGFLAGS) -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK\033[0m\n"
@@ -110,7 +145,7 @@ build: build-v8-snapshot
 	@printf "\033[33mBuild OK\033[0m\n"
 
 ## Build in debug mode
-build-dev:
+build-dev: download-curl-impersonate
 	@printf "\033[36mBuilding (debug)...\033[0m\n"
 	@$(ZIG) build $(ZIGFLAGS) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK\033[0m\n"
@@ -125,7 +160,7 @@ run-debug: build-dev
 	@printf "\033[36mRunning...\033[0m\n"
 	@./zig-out/bin/lightpanda || (printf "\033[33mRun ERROR\033[0m\n"; exit 1;)
 
-test:
+test: download-curl-impersonate
 	TEST_FILTER="${F}" $(ZIG) build $(ZIGFLAGS) test -freference-trace
 
 ## Run demo/runner end to end tests

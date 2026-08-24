@@ -452,13 +452,28 @@ pub const Connection = struct {
         self.transport = .none;
         self.clearHeaders();
 
+        // stealthpanda: apply the browser TLS + HTTP/2 fingerprint first, so
+        // the cert-store SSL_CTX callback set below wins if curl-impersonate
+        // ever installs one of its own. Compiles out entirely in a stock
+        // (-Dtls_impersonate=false) build; a no-op when disabled at runtime
+        // via --tls-impersonate off.
+        if (comptime libcurl.impersonate_enabled) {
+            if (config.tlsImpersonate()) |profile| {
+                try libcurl.curl_easy_impersonate(self._easy, profile, false);
+            }
+        }
+
         // timeouts
         try libcurl.curl_easy_setopt(self._easy, .timeout_ms, config.httpTimeout());
         try libcurl.curl_easy_setopt(self._easy, .connect_timeout_ms, config.httpConnectTimeout());
 
         // compression, don't remove this. CloudFront will send gzip content
         // even if we don't support it, and then it won't be decompressed.
-        // empty string means: use whatever's available
+        // empty string means: use whatever's available — and enables curl's
+        // response decoders. stealthpanda: when impersonating we also add an
+        // explicit Accept-Encoding to the header list (chromeizeHeaders) so it
+        // lands in Chrome's position; curl sends that one but still decodes
+        // here because this option is set.
         try libcurl.curl_easy_setopt(self._easy, .accept_encoding, "");
 
         // proxy

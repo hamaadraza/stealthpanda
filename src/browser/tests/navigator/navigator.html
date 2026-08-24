@@ -117,7 +117,9 @@
 
   testing.expectEqual(1, navigator.userAgentData.brands.length);
   testing.expectEqual('Lightpanda', navigator.userAgentData.brands[0].brand);
-  testing.expectEqual("1.0.0-", navigator.userAgentData.brands[0].version.substring(0,6));
+  // Low-entropy brands carry the major version; the full version is only in
+  // getHighEntropyValues().fullVersionList (asserted below).
+  testing.expectEqual("1", navigator.userAgentData.brands[0].version);
 
   // Same instance returned on repeated access
   testing.expectEqual(true, navigator.userAgentData === navigator.userAgentData);

@@ -32,6 +32,11 @@ pub const CurlHeader = c.curl_header;
 pub const CurlSocket = c.curl_socket_t;
 pub const CurlOffT = c.curl_off_t;
 
+/// True when the curl-impersonate backend is linked in (`-Dtls_impersonate`).
+/// stealthpanda fork feature — guards the impersonation call sites so a stock
+/// build never references the (absent) curl_easy_impersonate symbol.
+pub const impersonate_enabled = lp.build_config.tls_impersonate;
+
 pub const CURLE = struct {
     pub const OK = c.CURLE_OK;
     pub const ABORTED_BY_CALLBACK = c.CURLE_ABORTED_BY_CALLBACK;
@@ -584,6 +589,19 @@ pub fn curl_easy_cleanup(easy: *Curl) void {
 
 pub fn curl_easy_reset(easy: *Curl) void {
     c.curl_easy_reset(easy);
+}
+
+/// curl-impersonate: shape the TLS ClientHello (JA3/JA4), extension order,
+/// cipher list, ALPS, cert compression and the HTTP/2 SETTINGS + pseudo-header
+/// order to match `target` (e.g. "chrome131"). Only linked when the
+/// curl-impersonate backend is compiled in. When `default_headers` is true it
+/// also injects the browser's default request headers; we pass false and build
+/// request headers ourselves. stealthpanda fork feature.
+pub fn curl_easy_impersonate(easy: *Curl, target: [:0]const u8, default_headers: bool) Error!void {
+    if (comptime !impersonate_enabled) {
+        @compileError("curl_easy_impersonate requires -Dtls_impersonate");
+    }
+    return errorCheck(c.curl_easy_impersonate(easy, target.ptr, @as(c_int, @intFromBool(default_headers))));
 }
 
 pub fn curl_easy_perform(easy: *Curl) Error!void {

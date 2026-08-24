@@ -19,6 +19,7 @@
 const builtin = @import("builtin");
 
 const Config = @import("../../Config.zig");
+const identity = @import("../../stealthpanda/identity.zig");
 const js = @import("../js/js.zig");
 const Execution = js.Execution;
 
@@ -26,32 +27,38 @@ const NavigatorUAData = @This();
 
 _pad: bool = false,
 
-const Brand = struct {
-    brand: []const u8,
-    version: []const u8,
-};
+// stealthpanda: the JS brand shape is owned by the identity module so the
+// impersonation profiles and the Lightpanda default share one type.
+const Brand = identity.JsBrand;
 
-pub fn getBrands(_: *const NavigatorUAData) []const Brand {
-    return brandList();
+// Lightpanda default brands, rendered once at comptime. `brands` (low-entropy)
+// carries the major version; `full_version_list` (high-entropy) the full one.
+const lightpanda_brands = toJs(Config.HttpHeaders.brands, false);
+const lightpanda_full_version_list = toJs(Config.HttpHeaders.brands, true);
+
+pub fn getBrands(_: *const NavigatorUAData, exec: *const Execution) []const Brand {
+    return activeBrands(exec);
 }
 
-pub fn getMobile(_: *const NavigatorUAData) bool {
+pub fn getMobile(_: *const NavigatorUAData, exec: *const Execution) bool {
+    if (identityOf(exec)) |id| return id.mobile;
     return false;
 }
 
-pub fn getPlatform(_: *const NavigatorUAData) []const u8 {
+pub fn getPlatform(_: *const NavigatorUAData, exec: *const Execution) []const u8 {
+    if (identityOf(exec)) |id| return id.ua_platform;
     return uaPlatform();
 }
 
-pub fn toJSON(_: *const NavigatorUAData) struct {
+pub fn toJSON(_: *const NavigatorUAData, exec: *const Execution) struct {
     brands: []const Brand,
     mobile: bool,
     platform: []const u8,
 } {
     return .{
-        .mobile = false,
-        .brands = brandList(),
-        .platform = uaPlatform(),
+        .mobile = if (identityOf(exec)) |id| id.mobile else false,
+        .brands = activeBrands(exec),
+        .platform = if (identityOf(exec)) |id| id.ua_platform else uaPlatform(),
     };
 }
 
@@ -62,34 +69,41 @@ pub fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8
 
     _ = hints;
 
-    const brands = brandList();
+    const id = identityOf(exec);
+    const full_version_list = if (id) |i| i.full_version_list else &lightpanda_full_version_list;
 
     return exec.js.local.?.resolvePromise(.{
-        .brands = brandList(),
-        .mobile = false,
-        .platform = uaPlatform(),
+        .brands = activeBrands(exec),
+        .mobile = if (id) |i| i.mobile else false,
+        .platform = if (id) |i| i.ua_platform else uaPlatform(),
         .architecture = uaArchitecture(),
         .bitness = uaBitness(),
         .model = "",
         .platformVersion = "",
-        .uaFullVersion = if (brands.len > 0) brands[0].version else "1.0.0.0",
-        .fullVersionList = brands,
+        .uaFullVersion = if (full_version_list.len > 0) full_version_list[0].version else "1.0.0.0",
+        .fullVersionList = full_version_list,
         .wow64 = false,
         .formFactor = [_][]const u8{"Desktop"},
     });
 }
 
-fn brandList() []const Brand {
-    const out = comptime blk: {
-        const src = &Config.HttpHeaders.brands;
-        var arr: [src.len]Brand = undefined;
-        for (src, 0..) |b, i| {
-            arr[i] = .{ .brand = b.brand, .version = b.full_version };
-        }
-        const final = arr;
-        break :blk final;
-    };
-    return &out;
+fn identityOf(exec: *const Execution) ?identity.Identity {
+    return exec.session.browser.http_client.impersonateIdentity();
+}
+
+fn activeBrands(exec: *const Execution) []const Brand {
+    if (identityOf(exec)) |id| return id.brands;
+    return &lightpanda_brands;
+}
+
+/// Maps the Config brand triples to the JS brand shape. `full` selects the full
+/// version (fullVersionList) over the major version (userAgentData.brands).
+fn toJs(comptime src: anytype, comptime full: bool) [src.len]Brand {
+    var arr: [src.len]Brand = undefined;
+    for (src, 0..) |b, i| {
+        arr[i] = .{ .brand = b.brand, .version = if (full) b.full_version else b.version };
+    }
+    return arr;
 }
 
 fn uaPlatform() []const u8 {
