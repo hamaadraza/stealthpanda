@@ -1,0 +1,11 @@
+<!doctype html><html><body><pre id="out">P</pre><script>
+var o={};
+["RTCPeerConnection","webkitRTCPeerConnection","mozRTCPeerConnection","RTCDataChannel",
+ "RTCSessionDescription","RTCIceCandidate","RTCRtpSender","RTCRtpReceiver","MediaStream",
+ "MediaStreamTrack","RTCCertificate"].forEach(function(k){ o[k]=typeof window[k]; });
+o.mediaDevices = typeof navigator.mediaDevices;
+o.enumerateDevices = navigator.mediaDevices ? typeof navigator.mediaDevices.enumerateDevices : "no-md";
+o.getUserMedia = navigator.mediaDevices ? typeof navigator.mediaDevices.getUserMedia : "no-md";
+try { var pc=new RTCPeerConnection(); o.pc_created=true; } catch(e){ o.pc_created="THREW:"+String(e).slice(0,60); }
+document.getElementById("out").textContent="S"+JSON.stringify(o)+"E";
+</script></body></html>

@@ -49,6 +49,9 @@ const BroadcastChannel = @import("BroadcastChannel.zig");
 const WorkerGlobalScope = @import("WorkerGlobalScope.zig");
 const NavigationHistoryEntry = @import("navigation/NavigationHistoryEntry.zig");
 const XMLHttpRequestEventTarget = @import("net/XMLHttpRequestEventTarget.zig");
+// stealthpanda: WebRTC event targets.
+const RTCPeerConnection = @import("WebRTC.zig");
+const RTCDataChannel = RTCPeerConnection.RTCDataChannel;
 
 const RegisterOptions = EventManager.RegisterOptions;
 
@@ -89,6 +92,9 @@ pub const Type = enum(u8) {
     idb_database,
     idb_transaction,
     notification,
+    // stealthpanda: WebRTC.
+    rtc_peer_connection,
+    rtc_data_channel,
 };
 
 // `.generic` maps to EventTarget itself: a standalone `new EventTarget()` has
@@ -121,6 +127,8 @@ pub fn Subtype(comptime tag: Type) type {
         .idb_database => IDBDatabase,
         .idb_transaction => IDBTransaction,
         .notification => Notification,
+        .rtc_peer_connection => RTCPeerConnection,
+        .rtc_data_channel => RTCDataChannel,
     };
 }
 
@@ -331,6 +339,8 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .idb_transaction => writer.writeAll("<IDBTransaction>"),
         .notification => writer.writeAll("<Notification>"),
         .navigation_history_entry => writer.writeAll("<NavigationHistoryEntry>"),
+        .rtc_peer_connection => writer.writeAll("<RTCPeerConnection>"),
+        .rtc_data_channel => writer.writeAll("<RTCDataChannel>"),
     };
 }
 
@@ -362,6 +372,8 @@ pub fn toString(self: *EventTarget) []const u8 {
         .idb_transaction => return "[object IDBTransaction]",
         .notification => return "[object Notification]",
         .navigation_history_entry => return "[object NavigationHistoryEntry]",
+        .rtc_peer_connection => return "[object RTCPeerConnection]",
+        .rtc_data_channel => return "[object RTCDataChannel]",
     };
 }
 

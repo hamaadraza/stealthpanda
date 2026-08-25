@@ -99,6 +99,8 @@ pub const Type = union(enum) {
     idb_version_change_event: *@import("storage/idb/IDBVersionChangeEvent.zig"),
     toggle_event: *@import("event/ToggleEvent.zig"),
     task_priority_change_event: *@import("event/TaskPriorityChangeEvent.zig"),
+    // stealthpanda: WebRTC onicecandidate event.
+    rtc_peer_connection_ice_event: *@import("WebRTC.zig").RTCPeerConnectionIceEvent,
 };
 
 pub const Options = struct {
@@ -213,6 +215,7 @@ pub fn is(self: *Event, comptime T: type) ?*T {
         .idb_version_change_event => |e| return if (T == @import("storage/idb/IDBVersionChangeEvent.zig")) e else null,
         .toggle_event => |e| return if (T == @import("event/ToggleEvent.zig")) e else null,
         .task_priority_change_event => |e| return if (T == @import("event/TaskPriorityChangeEvent.zig")) e else null,
+        .rtc_peer_connection_ice_event => |e| return if (T == @import("WebRTC.zig").RTCPeerConnectionIceEvent) e else null,
         .ui_event => |e| {
             if (T == @import("event/UIEvent.zig")) {
                 return e;
