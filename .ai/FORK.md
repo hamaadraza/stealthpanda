@@ -26,7 +26,16 @@ Deep context, read before non-trivial work:
    [src/Config.zig](../src/Config.zig) and [src/cli.zig](../src/cli.zig) (CLI
    flags), [src/browser/js/bridge.zig](../src/browser/js/bridge.zig) (the
    `PageJsApis`/`JsApis` registration lists at the bottom),
-   [build.zig](../build.zig), [build.zig.zon](../build.zig.zon).
+   [build.zig](../build.zig), [build.zig.zon](../build.zig.zon). The fork also now
+   makes small, additive edits to other upstream files that merges may conflict
+   on — expect and re-apply them: the `Type` enum/union + subtype switches in
+   [EventTarget.zig](../src/browser/webapi/EventTarget.zig) and
+   [Event.zig](../src/browser/webapi/Event.zig) (WebRTC event targets),
+   `contentAxis` in [Element.zig](../src/browser/webapi/Element.zig) (font
+   measurement), the `TZ`-pin line in [main.zig](../src/main.zig), the geolocation
+   grant in [Browser.zig](../src/browser/Browser.zig), and the Rust crate
+   ([Cargo.toml](../src/html5ever/Cargo.toml) / [lib.rs](../src/html5ever/lib.rs)).
+   Each is documented under its feature in **Fork features** below.
 4. **Never edit `.github/` workflows casually.** Upstream enforces a
    supply-chain policy (`.plumber.yaml`) over them; fork CI changes should be
    separate, deliberate commits.
@@ -35,6 +44,27 @@ Deep context, read before non-trivial work:
    `.ai/`.
 
 ## Fork features
+
+The stealth work spans three layers: the **network fingerprint** (TLS / HTTP2 /
+headers), the **static JS environment** (what a bot sensor reads synchronously),
+and **behavioral / rendered** surfaces (mouse motion, canvas & WebGL pixels, font
+metrics, timezone). One rule governs all of them:
+
+> **Everything is impersonation-gated.** A feature is active only when a TLS
+> profile is selected (`--tls-impersonate` != `off`). Off-path — which includes
+> **every test** ([src/testing.zig](../src/testing.zig) sets `--tls-impersonate
+> off`) — the browser is byte-identical to upstream Lightpanda. The gate is
+> usually `http_client.impersonateIdentity() != null`; navigator/window
+> accessors return `undefined` off-path, and constructor globals (which can't be
+> runtime-gated) simply exist unconditionally but stay inert.
+>
+> These are **native Zig** (not injected JS): every faked function toStrings as
+> `[native code]`, the structural advantage over puppeteer-extra-stealth. New
+> web-API types are registered in the `PageJsApis` list of
+> [src/browser/js/bridge.zig](../src/browser/js/bridge.zig) (a hot file — append
+> only).
+
+### Network fingerprint
 
 - **Stealth TLS/HTTP2 fingerprint** ([src/stealthpanda/impersonate.zig](../src/stealthpanda/impersonate.zig)):
   links the prebuilt [curl-impersonate](https://github.com/lexiforest/curl-impersonate)
@@ -64,6 +94,8 @@ Deep context, read before non-trivial work:
   environment. Getting past those needs a residential/mobile proxy
   (`--http-proxy`) and much deeper JS-environment work, respectively.
 
+### Coherent browser identity
+
 - **Coherent browser identity** ([src/stealthpanda/identity.zig](../src/stealthpanda/identity.zig)):
   when a TLS profile is active, the `User-Agent`, `Sec-Ch-Ua`/`-Mobile`/`-Platform`
   headers and the JS surfaces (`navigator.userAgent`, `.platform`, `.appVersion`,
@@ -76,16 +108,153 @@ Deep context, read before non-trivial work:
   [Navigator.zig](../src/browser/webapi/Navigator.zig) /
   [NavigatorUAData.zig](../src/browser/webapi/NavigatorUAData.zig). Tests run
   with `--tls-impersonate off` (set in [src/testing.zig](../src/testing.zig)).
-  **Remaining refinements** (not yet done): match Chrome's exact request
-  **header order**; add Safari/Firefox identity profiles (only chrome131/chrome136
-  are pinned today — other targets keep the Lightpanda identity); honour the CDP
-  `userAgentMetadata` override; set `navigator.hardwareConcurrency`/`deviceMemory`
-  from the profile.
+  `navigator.userAgentData.getHighEntropyValues` reports `architecture: "arm"`
+  and a macOS `platformVersion` from the profile — coherent with the frozen
+  "Intel Mac OS X 10_15_7" UA + Apple-Metal WebGL renderer that a real
+  Apple-Silicon Chrome presents. **Remaining refinements** (not yet done): add
+  Safari/Firefox identity profiles (only chrome131/chrome136 are pinned today —
+  other targets keep the Lightpanda identity); honour the CDP `userAgentMetadata`
+  override; drive per-profile `hardwareConcurrency`/`deviceMemory` (both are fixed
+  at `8` when impersonating today).
+
+### Static JS-environment stealth
+
+Native surfaces a bot sensor reads synchronously. Registered in
+[bridge.zig](../src/browser/js/bridge.zig) `PageJsApis`; navigator/window
+accessors return `undefined` off-path.
+
+- **window.chrome** ([Chrome.zig](../src/browser/webapi/Chrome.zig)) —
+  `app`/`runtime`/`csi`/`loadTimes` (a Chrome UA with no `window.chrome` is a
+  loud tell).
+- **navigator.plugins / mimeTypes**
+  ([PluginArray.zig](../src/browser/webapi/PluginArray.zig)) — Chrome's shared
+  5-plugin / 2-mimetype PDF graph with cross-referenced prototypes;
+  `navigator.pdfViewerEnabled` = true; `productSub`/`vendorSub`
+  ([Navigator.zig](../src/browser/webapi/Navigator.zig)).
+- **navigator.connection / mediaDevices**
+  ([NetworkInformation.zig](../src/browser/webapi/NetworkInformation.zig),
+  [MediaDevices.zig](../src/browser/webapi/MediaDevices.zig)) — 4g/rtt/downlink;
+  audioinput/videoinput/audiooutput devices.
+- **Battery / Web Bluetooth / SpeechSynthesis / Web Audio**
+  ([BatteryManager.zig](../src/browser/webapi/BatteryManager.zig),
+  [Bluetooth.zig](../src/browser/webapi/Bluetooth.zig),
+  [SpeechSynthesis.zig](../src/browser/webapi/SpeechSynthesis.zig),
+  [WebAudio.zig](../src/browser/webapi/WebAudio.zig)) — `navigator.getBattery()`,
+  `navigator.bluetooth`, `speechSynthesis.getVoices()` (a plausible macOS voice
+  set — headless Chrome's *empty* voice list is itself a tell), `AudioContext` +
+  destination/analyser nodes. The device constructors are unconditional globals.
+- **WebGL parameters**
+  ([WebGLRenderingContext.zig](../src/browser/webapi/canvas/WebGLRenderingContext.zig)) —
+  `getParameter` returns Chrome's `VENDOR`/`RENDERER`/`VERSION` strings and the
+  Apple-M1 `UNMASKED_*` GPU strings, the full WebGL 1.0 enum-constant set,
+  `getContextAttributes`, `getShaderPrecisionFormat`. Context is `null` off-path
+  ([Canvas.zig](../src/browser/webapi/element/html/Canvas.zig) `getContext`).
+- **Screen / window geometry**
+  ([Screen.zig](../src/browser/webapi/Screen.zig),
+  [Window.zig](../src/browser/webapi/Window.zig)) — a coherent 1920×1200 WUXGA
+  screen with macOS menu-bar `avail*` insets (invariant `inner < outer < avail <
+  screen`, which a real browser always satisfies); `isSecureContext` reports the
+  real value for the origin (an https page with `isSecureContext=false` is
+  impossible).
+
+### Behavioral
+
+- **Synthetic mouse movement**
+  ([behavior.zig](../src/stealthpanda/behavior.zig)) — started from
+  `Frame._documentIsLoaded` on the root frame when impersonating: a momentum
+  random-walk pointer path (~58 `mousemove` events with real `movementX/Y` and
+  coherent, increasing `timeStamp`s) spread over real time via the frame
+  scheduler. It holds a `_pending_load` so the events fire before the `load`-based
+  fetch settles. Defeats behavioral "dead pointer" checks (detect-headless
+  mouse-move). Touch point: the `_documentIsLoaded` hook + `pub`
+  `pendingLoadCompleted` in [Frame.zig](../src/browser/Frame.zig).
+
+### Rendered surfaces (software rasterization)
+
+Upstream has no rendering engine, so canvas/WebGL/font-metric fingerprints were
+blank or threw — loud tells. Inspired by Cloudflare's Kitesurf (CPU rasterization
+in Rust), these produce real pixels/metrics without a GPU.
+
+- **Software canvas-2D rasterizer**
+  ([src/html5ever/stealthpanda_canvas.rs](../src/html5ever/stealthpanda_canvas.rs)
+  + [canvas_raster.zig](../src/stealthpanda/canvas_raster.zig)): the 2D context
+  ([CanvasRenderingContext2D.zig](../src/browser/webapi/canvas/CanvasRenderingContext2D.zig))
+  records draw ops into a byte stream; Rust replays them with **tiny-skia**
+  (fills/paths) + **ttf-parser** glyph outlines using a bundled 27 KB Noto Sans
+  Latin subset ([stealthpanda_font.ttf](../src/html5ever/stealthpanda_font.ttf),
+  SIL OFL). `canvas.toDataURL()`
+  ([Canvas.zig](../src/browser/webapi/element/html/Canvas.zig)) returns a real,
+  correctly-sized PNG instead of a 1×1 blank; `measureText` returns real
+  advances. **Built into the existing html5ever staticlib** (a second Rust
+  staticlib collides on std/panic symbols) — touch points: `tiny-skia` +
+  `ttf-parser` in [src/html5ever/Cargo.toml](../src/html5ever/Cargo.toml), a `mod`
+  line in [src/html5ever/lib.rs](../src/html5ever/lib.rs), file-tracking in
+  [build.zig](../build.zig).
+- **WebGL render stubs**
+  ([WebGLRenderingContext.zig](../src/browser/webapi/canvas/WebGLRenderingContext.zig)):
+  ~95 render methods (one shared no-op via `.noop`), opaque handle types
+  (`WebGLShader`/`Program`/`Buffer`/…), `gl.canvas`/`drawingBufferWidth`, and a
+  `readPixels` that fills the caller's buffer with **per-session deterministic
+  noise** (seeded from the session pointer). The render + `readPixels` path now
+  completes, so the WebGL *image* hash computes (was a `readPixels: TypeError`).
+  Real GPU rendering (SwiftShader-class) is out of scope — Kitesurf skips it too.
+- **Font metrics** ([fonts.zig](../src/stealthpanda/fonts.zig)): a macOS
+  font-scale model. `canvas.measureText` and **DOM text measurement**
+  ([Element.zig](../src/browser/webapi/Element.zig) `contentAxis`, gated — this
+  is core layout, a hot file) scale the bundled-font advance per requested
+  family: known macOS fonts get distinct factors (read as *installed*), unknown
+  families fall through the CSS stack to the generic fallback (read as *not
+  installed*). browserleaks/fonts goes from "1 unique metric" (flat 5×5) to a
+  varied, macOS-coherent set; this also fixes the general text-element 5×5 tell.
+
+### Environment / geolocation
+
+- **Timezone & geolocation** ([geo.zig](../src/stealthpanda/geo.zig)):
+  `--timezone <IANA>` pins the process `TZ` before V8/ICU initializes (via
+  [main.zig](../src/main.zig), before `App.init`), defaulting to
+  `America/New_York` when impersonating so `Intl`/`Date` stop reporting the host's
+  UTC (a datacenter tell). `--geolocation "lat,lon[,accuracy]"` grants the
+  geolocation permission and populates Lightpanda's existing `geolocation_override`
+  in [Browser.zig](../src/browser/Browser.zig), so `getCurrentPosition` returns
+  coordinates instead of "User denied". CLI options + `timezone()`/`geolocation()`
+  accessors in [src/Config.zig](../src/Config.zig). Pair with `--http-proxy` so
+  IP + timezone + coordinates all agree.
+
+### Misc DOM
+
+- **Table `insertRow` / `insertCell`**
+  ([element/html/Table.zig](../src/browser/webapi/element/html/Table.zig),
+  [element/html/TableRow.zig](../src/browser/webapi/element/html/TableRow.zig)) —
+  standard methods some detectors exercise; unconditional (not gated).
+
+### Known residuals (deep / architectural)
+
+Honest limits, useful when deciding what to work on next:
+
+- **IP reputation** is the wall the network fingerprint can't cross — a
+  datacenter egress is hard-403'd by Akamai-class managers before any JS. Needs a
+  residential/mobile `--http-proxy`.
+- **Canvas / WebGL image hashes don't match a real GPU** — the CPU rasterizer +
+  our bundled font (canvas) and the `readPixels` noise (WebGL) are *plausible and
+  non-blank*, but won't land in a "known real Chrome" cluster; a detector that
+  re-renders a known scene and compares would notice.
+- **Fonts are one bundled font scaled per family**, not real per-font glyph
+  metrics; the font fingerprint is deterministic (all instances share it — which
+  is fine: a real machine's font set is stable).
+- **No layout engine** — text measurement is a single-line advance sum (no
+  kerning/wrapping/`letter-spacing`); a full engine (Blitz/Stylo/Parley, à la
+  Kitesurf) is deliberately *not* integrated because it would break
+  upstream-mergeability. See the WebGL2, `queryLocalFonts`, and audio-render
+  vectors as further-out surfaces.
 
 ## Fork-specific facts
 
 - **License is AGPL-3.0-only.** All fork code stays AGPL. If the fork is ever
-  offered as a network service, its source must be made available to users.
+  offered as a network service, its source must be made available to users. The
+  one bundled binary asset,
+  [src/html5ever/stealthpanda_font.ttf](../src/html5ever/stealthpanda_font.ttf)
+  (Noto Sans, Latin subset), is under the SIL Open Font License — compatible with
+  AGPL redistribution; keep its license intact if replacing it.
 - **Telemetry**: upstream sends opt-out usage telemetry to lightpanda.io
   ([src/telemetry/](../src/telemetry/)). Check the fork's current policy before
   building release binaries; `LIGHTPANDA_DISABLE_TELEMETRY=true` disables it at
@@ -99,7 +268,9 @@ Deep context, read before non-trivial work:
 ## Quality gates (from upstream, enforced locally)
 
 - Zig **0.16** (`build.zig.zon` `minimum_zig_version`); Rust/cargo required for
-  the html5ever crate.
+  the html5ever crate — which now also builds the fork's canvas rasterizer
+  (`tiny-skia` + `ttf-parser`, added in
+  [src/html5ever/Cargo.toml](../src/html5ever/Cargo.toml)).
 - `zig build` fails on formatting drift — the default step depends on `zig fmt`.
 - The test runner fails any test that leaks memory in debug builds. Free what
   you allocate in tests.
