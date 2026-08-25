@@ -115,6 +115,21 @@ pub fn as(self: *Media, comptime T: type) *T {
 }
 
 pub fn canPlayType(_: *const Media, mime_type: []const u8, frame: *Frame) []const u8 {
+    // stealthpanda: when impersonating, answer the codecs that a bare
+    // container-type check gets wrong for the way desktop Chrome on macOS
+    // behaves, so video-codec feature probes stay coherent with the Chrome
+    // identity. Upstream ignores the `codecs=` parameter, so it mis-reports
+    // HEVC and AV1 (both `video/mp4`) as playable and Theora (`video/ogg`) too,
+    // and it misses HLS entirely. Gated: off-path this is a no-op.
+    if (frame._session.browser.http_client.impersonateIdentity() != null and mime_type.len <= frame.buf.len) {
+        const lower_full = std.ascii.lowerString(frame.buf[0..mime_type.len], mime_type);
+        if (std.mem.indexOf(u8, lower_full, "mpegurl") != null) return "maybe"; // HLS
+        if (std.mem.indexOf(u8, lower_full, "theora") != null) return ""; // Ogg/Theora
+        if (std.mem.indexOf(u8, lower_full, "hev1") != null or
+            std.mem.indexOf(u8, lower_full, "hvc1") != null) return ""; // H.265/HEVC
+        if (std.mem.indexOf(u8, lower_full, "av01") != null) return ""; // AV1
+    }
+
     const pos = std.mem.indexOfScalar(u8, mime_type, ';') orelse mime_type.len;
     const base_type = std.mem.trim(u8, mime_type[0..pos], &std.ascii.whitespace);
 

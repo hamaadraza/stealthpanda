@@ -33,6 +33,7 @@ const NetworkInformation = @import("NetworkInformation.zig");
 const MediaDevices = @import("MediaDevices.zig");
 const BatteryManager = @import("BatteryManager.zig");
 const Bluetooth = @import("Bluetooth.zig");
+const Features = @import("Features.zig");
 
 const Navigator = @This();
 
@@ -40,7 +41,7 @@ comptime {
     // Ensure we don't cause an identity map conflict. Because _geolocation is
     // lazy and, for now, Zig orders the highest-aligned field first, none of
     // the other fields land at offset 0.
-    for ([_][]const u8{ "_plugins", "_mime_types", "_connection", "_media_devices", "_battery", "_bluetooth", "_permissions", "_storage", "_ua_data" }) |name| {
+    for ([_][]const u8{ "_plugins", "_mime_types", "_connection", "_media_devices", "_battery", "_bluetooth", "_service_worker", "_storage_quota", "_permissions", "_storage", "_ua_data" }) |name| {
         if (@offsetOf(Navigator, name) == 0) @compileError(name ++ " aliases the Navigator");
     }
 }
@@ -60,6 +61,10 @@ _media_devices: MediaDevices = .{},
 // stealthpanda: navigator.getBattery() singleton / navigator.bluetooth.
 _battery: BatteryManager = .{},
 _bluetooth: Bluetooth = .{},
+// stealthpanda: navigator.serviceWorker / legacy webkit*Storage quota objects
+// (impersonation-gated). Shared singletons, like the other stub sub-objects.
+_service_worker: Features.ServiceWorkerContainer = .{},
+_storage_quota: Features.DeprecatedStorageQuota = .{},
 _permissions: Permissions = .{},
 _geolocation: ?*Geolocation = null,
 _storage: StorageManager = .{},
@@ -239,6 +244,40 @@ pub fn getBluetooth(self: *Navigator, exec: *const Execution) ?*Bluetooth {
     return &self._bluetooth;
 }
 
+// stealthpanda: navigator.serviceWorker — every desktop Chrome has it; its
+// absence under a Chrome UA is a cheap tell (`"serviceWorker" in navigator`).
+// Undefined off-path, like bluetooth.
+pub fn getServiceWorker(self: *Navigator, exec: *const Execution) ?*Features.ServiceWorkerContainer {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return &self._service_worker;
+}
+
+// stealthpanda: navigator.getGamepads() — present (unprefixed) on desktop
+// Chrome. No controllers are connected, so it returns an empty list.
+pub fn getGamepads(_: *const Navigator) [0]u32 {
+    return .{};
+}
+
+// stealthpanda: navigator.vibrate() exists on desktop Chrome (a no-op that
+// returns true there). Registered as a noop so the function is simply present
+// and truthy for detectors; the return value is not fingerprinted.
+pub fn vibrate(_: *const Navigator) bool {
+    return true;
+}
+
+// stealthpanda: navigator.webkitTemporaryStorage / webkitPersistentStorage —
+// the legacy quota objects Chrome still exposes; both must exist for a
+// detector's `temporaryStorage && persistentStorage` probe. Gated like the rest.
+pub fn getWebkitTemporaryStorage(self: *Navigator, exec: *const Execution) ?*Features.DeprecatedStorageQuota {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return &self._storage_quota;
+}
+
+pub fn getWebkitPersistentStorage(self: *Navigator, exec: *const Execution) ?*Features.DeprecatedStorageQuota {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return &self._storage_quota;
+}
+
 pub fn getPermissions(self: *Navigator) *Permissions {
     return &self._permissions;
 }
@@ -380,6 +419,13 @@ pub const JsApi = struct {
     // undefined off-path).
     pub const getBattery = bridge.function(Navigator.getBattery, .{});
     pub const bluetooth = bridge.accessor(Navigator.getBluetooth, null, .{ .null_as_undefined = true });
+    // stealthpanda: serviceWorker / getGamepads / vibrate / webkit*Storage —
+    // JS surfaces feature detectors read on a Chrome UA (see Features.zig).
+    pub const serviceWorker = bridge.accessor(Navigator.getServiceWorker, null, .{ .null_as_undefined = true });
+    pub const getGamepads = bridge.function(Navigator.getGamepads, .{});
+    pub const vibrate = bridge.function(Navigator.vibrate, .{ .noop = true });
+    pub const webkitTemporaryStorage = bridge.accessor(Navigator.getWebkitTemporaryStorage, null, .{ .null_as_undefined = true });
+    pub const webkitPersistentStorage = bridge.accessor(Navigator.getWebkitPersistentStorage, null, .{ .null_as_undefined = true });
     pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{ .exposed = .window });
     pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{ .exposed = .window });
     pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .exposed = .window });

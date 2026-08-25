@@ -33,7 +33,15 @@ Deep context, read before non-trivial work:
    [Event.zig](../src/browser/webapi/Event.zig) (WebRTC event targets),
    `contentAxis` in [Element.zig](../src/browser/webapi/Element.zig) (font
    measurement), the `TZ`-pin line in [main.zig](../src/main.zig), the geolocation
-   grant in [Browser.zig](../src/browser/Browser.zig), and the Rust crate
+   grant in [Browser.zig](../src/browser/Browser.zig), additive members for the
+   HTML5 feature-detection surfaces in
+   [Navigator.zig](../src/browser/webapi/Navigator.zig) /
+   [Window.zig](../src/browser/webapi/Window.zig) /
+   [Document.zig](../src/browser/webapi/Document.zig), the impersonation-gated
+   codec block in [Media.zig](../src/browser/webapi/element/html/Media.zig)
+   `canPlayType`, native `isPointInPath` in
+   [CanvasRenderingContext2D.zig](../src/browser/webapi/canvas/CanvasRenderingContext2D.zig),
+   and the Rust crate
    ([Cargo.toml](../src/html5ever/Cargo.toml) / [lib.rs](../src/html5ever/lib.rs)).
    Each is documented under its feature in **Fork features** below.
 4. **Never edit `.github/` workflows casually.** Upstream enforces a
@@ -156,6 +164,28 @@ accessors return `undefined` off-path.
   screen`, which a real browser always satisfies); `isSecureContext` reports the
   real value for the origin (an https page with `isSecureContext=false` is
   impossible).
+- **HTML5 feature-detection surfaces**
+  ([Features.zig](../src/browser/webapi/Features.zig)) — the cluster of JS
+  globals/methods a Modernizr-style sensor (browserleaks/features,
+  detect-headless) reads on a Chrome UA. Impersonation-gated Navigator members
+  (`serviceWorker`, `getGamepads()`, `vibrate`, `webkitTemporaryStorage` /
+  `webkitPersistentStorage`), `window.webkitRequestFileSystem`, and
+  `document.exitFullscreen` / `exitPointerLock` (all in
+  [Navigator.zig](../src/browser/webapi/Navigator.zig) /
+  [Window.zig](../src/browser/webapi/Window.zig) /
+  [Document.zig](../src/browser/webapi/Document.zig)); plus the inert global
+  constructors `PushManager` / `MediaSource` / `MediaRecorder` /
+  `PublicKeyCredential` / `SpeechRecognition` and the instance-backed
+  `ServiceWorkerContainer` / `DeprecatedStorageQuota` (unconditional globals —
+  `new X()` throws, exactly Chrome's behaviour for PushManager/PublicKeyCredential).
+  The **crash-critical** piece is native `CanvasRenderingContext2D.isPointInPath`:
+  the features runner calls each detector uncaught, so a *missing* canvas method
+  throws and aborts the whole single pass, leaving the page with **no
+  fingerprint at all** — a far louder tell than any single value. Media codecs:
+  `canPlayType` ([Media.zig](../src/browser/webapi/element/html/Media.zig)), when
+  impersonating, answers Theora/HEVC/AV1 unsupported and HLS `maybe` to match
+  desktop Chrome on macOS (upstream's container-only check mis-reported them);
+  `canvas.toDataURL` honours the requested `image/jpeg` · `image/webp` MIME label.
 
 ### Behavioral
 
@@ -246,6 +276,22 @@ Honest limits, useful when deciding what to work on next:
   Kitesurf) is deliberately *not* integrated because it would break
   upstream-mergeability. See the WebGL2, `queryLocalFonts`, and audio-render
   vectors as further-out surfaces.
+- **browserleaks/features CSS & element bits stay `false`** — after the
+  crash-fix and the API-presence/codec work, the browser produces a full,
+  plausible features fingerprint and matches Chrome on every API-presence and
+  media-codec probe, but the ~60 CSS style-property / layout-render / element
+  detectors (`appearance`, `csscolumns*`, `cssvhunit`, `flexgap`,
+  `generatedcontent`, `details`/`meter`/`ruby`, `inlinesvg`/`mathml`, …) still
+  report unsupported — they need real style-property tables and a layout engine
+  (the residual above). The **features hash differing from a given Chrome is not
+  itself a tell**: browserleaks MD5s the boolean set for uniqueness, it is not
+  matched against a known-Chrome database — every browser build hashes
+  differently.
+- **`toDataURL("image/jpeg" | "image/webp")`** reports the correct
+  `data:image/<type>` prefix, but the encoded bytes are still PNG (the rasterizer
+  has no JPEG/WebP encoder) — same byte-level residual class as the canvas image
+  hash above: fine for feature detection, visible to a decoder that parses the
+  payload.
 
 ## Fork-specific facts
 

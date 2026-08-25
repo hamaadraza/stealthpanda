@@ -279,6 +279,11 @@ pub fn getSpeechSynthesis(self: *Window, exec: *const Execution) ?*SpeechSynthes
     return &self._speech_synthesis;
 }
 
+// stealthpanda: window.webkitRequestFileSystem — the legacy (webkit-prefixed)
+// Filesystem API entry point Chrome still exposes. Detectors only read that it
+// exists; registered as a noop so the function is present and truthy.
+pub fn webkitRequestFileSystem(_: *const Window) void {}
+
 // stealthpanda: isSecureContext. Off-path keeps Lightpanda's flat `false`. When
 // impersonating, report what Chrome reports: true for https/wss/file origins and
 // http loopback (localhost / 127.0.0.1 / [::1]). An https page with
@@ -1239,6 +1244,8 @@ pub const JsApi = struct {
     pub const chrome = bridge.accessor(Window.getChrome, null, .{ .null_as_undefined = true });
     // stealthpanda: window.speechSynthesis (undefined unless impersonating).
     pub const speechSynthesis = bridge.accessor(Window.getSpeechSynthesis, null, .{ .null_as_undefined = true });
+    // stealthpanda: window.webkitRequestFileSystem (legacy Filesystem API entry).
+    pub const webkitRequestFileSystem = bridge.function(Window.webkitRequestFileSystem, .{ .noop = true });
     pub const visualViewport = bridge.accessor(Window.getVisualViewport, Window.setVisualViewport, .{});
     pub const performance = bridge.accessor(Window.getPerformance, Window.setPerformance, .{});
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{});

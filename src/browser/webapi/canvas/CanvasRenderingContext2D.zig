@@ -212,6 +212,15 @@ pub fn rect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {
 pub fn fill(_: *CanvasRenderingContext2D) void {}
 pub fn stroke(_: *CanvasRenderingContext2D) void {}
 pub fn clip(_: *CanvasRenderingContext2D) void {}
+// stealthpanda: real method (not a no-op) because feature detectors call it and
+// use the return value uncaught — a *missing* isPointInPath throws and aborts
+// the whole detector run (e.g. browserleaks/features' single-pass testRunner),
+// leaving the page with no fingerprint at all, a louder tell than any single
+// value. We track no path geometry, so we report `false` (no hit), which also
+// matches Chrome's answer for the even-odd overlap probe these libraries use.
+pub fn isPointInPath(_: *const CanvasRenderingContext2D, _: f64, _: f64, _: ?[]const u8) bool {
+    return false;
+}
 pub fn fillText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f64, _: ?f64) void {
     self.recordText(text, x, y) catch {};
 }
@@ -329,6 +338,7 @@ pub const JsApi = struct {
     pub const fill = bridge.function(CanvasRenderingContext2D.fill, .{ .noop = true });
     pub const stroke = bridge.function(CanvasRenderingContext2D.stroke, .{ .noop = true });
     pub const clip = bridge.function(CanvasRenderingContext2D.clip, .{ .noop = true });
+    pub const isPointInPath = bridge.function(CanvasRenderingContext2D.isPointInPath, .{});
     pub const fillText = bridge.function(CanvasRenderingContext2D.fillText, .{});
     pub const strokeText = bridge.function(CanvasRenderingContext2D.strokeText, .{});
     pub const measureText = bridge.function(CanvasRenderingContext2D.measureText, .{});
