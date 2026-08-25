@@ -1205,7 +1205,7 @@ pub fn iframeCompletedLoading(self: *Frame, iframe: *IFrame, delays_load: bool) 
     }
 }
 
-fn pendingLoadCompleted(self: *Frame) void {
+pub fn pendingLoadCompleted(self: *Frame) void {
     const pending_loads = self._pending_loads;
     if (pending_loads == 1) {
         self._pending_loads = 0;
