@@ -1258,9 +1258,14 @@ pub fn hasFocus(_: *Document) bool {
 
 // stealthpanda: document.exitFullscreen / exitPointerLock — present on every
 // desktop Chrome; detectors probe their existence (`prefixed("exitFullscreen",
-// document)`). Registered as noops so the methods exist without a rendering
-// engine to actually enter/exit fullscreen or lock the pointer.
-pub fn exitFullscreen(_: *Document) void {}
+// document)`). We have no rendering engine to actually enter/exit fullscreen or
+// lock the pointer. exitFullscreen returns a Promise in Chrome, so we resolve
+// one (returning bare undefined would crash callers that do
+// `exitFullscreen().then(...)`); exitPointerLock returns undefined in Chrome, so
+// it stays a noop.
+pub fn exitFullscreen(_: *Document, exec: *const js.Execution) !js.Promise {
+    return exec.js.local.?.resolvePromise({});
+}
 pub fn exitPointerLock(_: *Document) void {}
 
 pub fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {
@@ -1618,7 +1623,7 @@ pub const JsApi = struct {
     pub const lastModified = bridge.accessor(Document.getLastModified, null, .{});
     pub const referrer = bridge.accessor(Document.getReferrer, null, .{});
     // stealthpanda: document.exitFullscreen / exitPointerLock (present on Chrome).
-    pub const exitFullscreen = bridge.function(Document.exitFullscreen, .{ .noop = true });
+    pub const exitFullscreen = bridge.function(Document.exitFullscreen, .{});
     pub const exitPointerLock = bridge.function(Document.exitPointerLock, .{ .noop = true });
 
     // Generates a getter/setter pair backed by the frame's attribute-listener

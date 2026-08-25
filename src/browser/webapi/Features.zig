@@ -86,8 +86,14 @@ pub const ServiceWorkerContainer = struct {
     }
 
     pub fn register(_: *const ServiceWorkerContainer, _: []const u8, exec: *const Execution) !js.Promise {
-        // No worker is actually installed; resolve to undefined (inert).
-        return exec.js.local.?.resolvePromise({});
+        // We have no Service Worker runtime, so registration *fails* — a normal,
+        // handled outcome (Chrome rejects the same way when the SW script can't
+        // be fetched). Rejecting is critical: resolving to a fake/undefined
+        // registration makes real apps crash on `registration.addEventListener`
+        // (observed breaking a Next.js site). Callers' `.catch` handles this.
+        return exec.js.local.?.rejectPromise(.{
+            .type_error = "Failed to register a ServiceWorker: the script resource could not be fetched.",
+        });
     }
 
     pub fn getRegistration(_: *const ServiceWorkerContainer, exec: *const Execution) !js.Promise {
