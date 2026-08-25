@@ -25,8 +25,9 @@ const color = @import("../../color.zig");
 const Canvas = @import("../element/html/Canvas.zig");
 const ImageData = @import("../ImageData.zig");
 const Frame = @import("../../Frame.zig");
-// stealthpanda: software canvas rasterizer op stream.
+// stealthpanda: software canvas rasterizer op stream + font-metrics model.
 const canvas_raster = @import("../../../stealthpanda/canvas_raster.zig");
+const fonts = @import("../../../stealthpanda/fonts.zig");
 
 const Execution = js.Execution;
 
@@ -241,9 +242,27 @@ const TextMetrics = struct {
     fontBoundingBoxDescent: f64,
 };
 
+// Extracts the family list from a CSS font shorthand ("bold 14px 'Comic Sans MS',
+// sans-serif" -> "'Comic Sans MS', sans-serif").
+fn fontFamily(font: []const u8) []const u8 {
+    var it = std.mem.tokenizeAny(u8, font, " \t");
+    while (it.next()) |tok| {
+        if (std.mem.indexOf(u8, tok, "px") != null or std.mem.indexOf(u8, tok, "pt") != null) {
+            return std.mem.trim(u8, font[it.index..], " \t");
+        }
+    }
+    return font;
+}
+
 pub fn measureText(self: *const CanvasRenderingContext2D, text: []const u8) TextMetrics {
     const px = fontPx(self._font);
-    const width: f64 = canvas_raster.measureText(text, px);
+    // stealthpanda: scale the advance by the requested family so font detection
+    // sees distinct, macOS-coherent metrics. Off-path, the raw advance.
+    const family_scale: f64 = if (self._frame._session.browser.http_client.impersonateIdentity() != null)
+        (fonts.scaleForFamilyList(fontFamily(self._font)) orelse fonts.default_scale)
+    else
+        1.0;
+    const width: f64 = @as(f64, canvas_raster.measureText(text, px)) * family_scale;
     // Approximate the box metrics from the font size (Noto Sans-ish ratios).
     return .{
         .width = width,

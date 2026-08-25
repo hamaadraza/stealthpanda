@@ -1578,7 +1578,51 @@ fn contentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
         }
     }
 
+    // stealthpanda: measure this element's own text so font-fingerprint probes
+    // (hidden <span>s measured via offsetWidth) report real, family-dependent
+    // metrics instead of a flat 5x5. Off-path this is skipped (upstream shape).
+    if (frame._session.browser.http_client.impersonateIdentity() != null) {
+        total += self.textContentAxis(frame, axis);
+    }
+
     return total;
+}
+
+// stealthpanda: width/height contributed by this element's direct text nodes,
+// via the bundled-font advances scaled per the computed font-family.
+fn textContentAxis(self: *Element, frame: *Frame, comptime axis: Axis) f64 {
+    const stealth_fonts = @import("../../stealthpanda/fonts.zig");
+    var font_px: f32 = 16;
+    var family: []const u8 = "";
+    if (self.getStyle(frame)) |style| {
+        const decl = style.asCSSStyleDeclaration();
+        font_px = parseCssPx(decl.getPropertyValue("font-size", frame), 16);
+        family = decl.getPropertyValue("font-family", frame);
+    }
+
+    var width: f64 = 0;
+    var has_text = false;
+    var child = self.asNode().firstChild();
+    while (child) |node| : (child = node.nextSibling()) {
+        if (node.is(Element) != null) continue;
+        const text = node.getData().str();
+        if (text.len == 0) continue;
+        has_text = true;
+        if (axis == .width) width += stealth_fonts.textWidth(text, font_px, family);
+    }
+    if (!has_text) return 0;
+    return switch (axis) {
+        .width => width,
+        .height => @as(f64, font_px) * 1.2, // single line
+    };
+}
+
+fn parseCssPx(value: []const u8, default: f32) f32 {
+    const s = std.mem.trim(u8, value, " \t");
+    if (std.mem.endsWith(u8, s, "px")) {
+        return std.fmt.parseFloat(f32, s[0 .. s.len - 2]) catch default;
+    }
+    return default;
 }
 
 pub fn getOffsetHeight(self: *Element, frame: *Frame) f64 {
