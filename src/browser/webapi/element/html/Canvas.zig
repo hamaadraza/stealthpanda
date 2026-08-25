@@ -106,7 +106,9 @@ pub fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?Draw
             if (frame._session.browser.http_client.impersonateIdentity() == null) {
                 return null;
             }
-            const ctx = try frame._factory.create(WebGLRenderingContext{});
+            // stealthpanda: seed the readPixels noise from the session pointer
+            // (stable within a session, varies across launches via ASLR).
+            const ctx = try frame._factory.create(WebGLRenderingContext{ ._seed = @intFromPtr(frame._session), ._canvas = self });
             break :blk .{ .webgl = ctx };
         }
         return null;

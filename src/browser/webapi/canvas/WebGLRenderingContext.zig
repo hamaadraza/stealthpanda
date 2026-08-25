@@ -20,6 +20,7 @@ const std = @import("std");
 
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
+const Canvas = @import("../element/html/Canvas.zig");
 const Execution = js.Execution;
 
 pub fn registerTypes() []const type {
@@ -29,13 +30,55 @@ pub fn registerTypes() []const type {
         // to revisit this.
         Extension.Type.WEBGL_debug_renderer_info,
         Extension.Type.WEBGL_lose_context,
+        // stealthpanda: opaque handle objects returned by the render stubs.
+        WebGLShader,
+        WebGLProgram,
+        WebGLBuffer,
+        WebGLTexture,
+        WebGLFramebuffer,
+        WebGLRenderbuffer,
+        WebGLUniformLocation,
     };
 }
 
 const WebGLRenderingContext = @This();
 
-// Zero-state context; the field just gives the factory a non-empty allocation.
-_pad: u8 = 0,
+// stealthpanda: per-session seed for the readPixels noise (set by getContext
+// from the session pointer, so it's stable within a session and varies across
+// launches via ASLR). Also serves as the factory's non-empty allocation.
+_seed: u64 = 0,
+// stealthpanda: back-reference to the owning canvas (gl.canvas /
+// gl.drawingBufferWidth/Height; fingerprint scripts read gl.canvas.width).
+_canvas: *Canvas = undefined,
+
+// stealthpanda: opaque WebGL handle objects. Real WebGL rendering needs a GPU
+// (a line even Cloudflare's Kitesurf doesn't cross), so we can't produce a
+// GPU-accurate image. But a Chrome UA whose gl.createShader/drawArrays/readPixels
+// throw is a loud tell, so these stubs let the render sequence complete and
+// readPixels returns per-session noise (chosen over a constant, fleet-shared
+// hash) — the WebGL *report* fingerprint (params/extensions/unmasked) is fully
+// spoofed separately in getParameter.
+fn Handle(comptime type_name: [:0]const u8) type {
+    return struct {
+        const Self = @This();
+        _pad: u8 = 0,
+        pub const JsApi = struct {
+            pub const bridge = js.Bridge(Self);
+            pub const Meta = struct {
+                pub const name = type_name;
+                pub const prototype_chain = bridge.prototypeChain();
+                pub var class_id: bridge.ClassId = undefined;
+            };
+        };
+    };
+}
+pub const WebGLShader = Handle("WebGLShader");
+pub const WebGLProgram = Handle("WebGLProgram");
+pub const WebGLBuffer = Handle("WebGLBuffer");
+pub const WebGLTexture = Handle("WebGLTexture");
+pub const WebGLFramebuffer = Handle("WebGLFramebuffer");
+pub const WebGLRenderbuffer = Handle("WebGLRenderbuffer");
+pub const WebGLUniformLocation = Handle("WebGLUniformLocation");
 
 /// On Chrome and Safari, a call to `getSupportedExtensions` returns total of 39.
 /// The reference for it lists lesser number of extensions:
@@ -256,6 +299,132 @@ pub fn getShaderPrecisionFormat(_: *const WebGLRenderingContext, shader_type: u3
     };
 }
 
+// stealthpanda: WebGL render stubs. A shared no-op backs every state-changing
+// call (viewport, draw*, uniform*, bind*, etc.) — with `.noop = true` the JS
+// stub ignores its arguments, so one nullary fn covers every arity.
+fn glNoop(_: *const WebGLRenderingContext) void {}
+
+pub fn getCanvas(self: *const WebGLRenderingContext) *Canvas {
+    return self._canvas;
+}
+pub fn getDrawingBufferWidth(self: *const WebGLRenderingContext) u32 {
+    return self._canvas.getWidth();
+}
+pub fn getDrawingBufferHeight(self: *const WebGLRenderingContext) u32 {
+    return self._canvas.getHeight();
+}
+
+// Handle factories — the render code chains these objects but never inspects
+// them, so an opaque instance per call is enough.
+pub fn createShader(_: *const WebGLRenderingContext, _: js.Value, frame: *Frame) !*WebGLShader {
+    return frame._factory.create(WebGLShader{});
+}
+pub fn createProgram(_: *const WebGLRenderingContext, frame: *Frame) !*WebGLProgram {
+    return frame._factory.create(WebGLProgram{});
+}
+pub fn createBuffer(_: *const WebGLRenderingContext, frame: *Frame) !*WebGLBuffer {
+    return frame._factory.create(WebGLBuffer{});
+}
+pub fn createTexture(_: *const WebGLRenderingContext, frame: *Frame) !*WebGLTexture {
+    return frame._factory.create(WebGLTexture{});
+}
+pub fn createFramebuffer(_: *const WebGLRenderingContext, frame: *Frame) !*WebGLFramebuffer {
+    return frame._factory.create(WebGLFramebuffer{});
+}
+pub fn createRenderbuffer(_: *const WebGLRenderingContext, frame: *Frame) !*WebGLRenderbuffer {
+    return frame._factory.create(WebGLRenderbuffer{});
+}
+pub fn getUniformLocation(_: *const WebGLRenderingContext, _: js.Value, _: js.Value, frame: *Frame) !*WebGLUniformLocation {
+    return frame._factory.create(WebGLUniformLocation{});
+}
+pub fn getAttribLocation(_: *const WebGLRenderingContext, _: js.Value, _: js.Value) i32 {
+    return 0;
+}
+pub fn getError(_: *const WebGLRenderingContext) u32 {
+    return 0; // NO_ERROR
+}
+// Compile/link/validate always "succeed" so the render sequence proceeds; any
+// other query returns a truthy value that also works as a count.
+pub fn getShaderParameter(_: *const WebGLRenderingContext, _: js.Value, _: js.Value) bool {
+    return true;
+}
+pub fn getProgramParameter(_: *const WebGLRenderingContext, _: js.Value, _: js.Value) bool {
+    return true;
+}
+pub fn getShaderInfoLog(_: *const WebGLRenderingContext, _: js.Value) []const u8 {
+    return "";
+}
+pub fn getProgramInfoLog(_: *const WebGLRenderingContext, _: js.Value) []const u8 {
+    return "";
+}
+pub fn getShaderSource(_: *const WebGLRenderingContext, _: js.Value) []const u8 {
+    return "";
+}
+pub fn checkFramebufferStatus(_: *const WebGLRenderingContext, _: js.Value) u32 {
+    return 0x8CD5; // FRAMEBUFFER_COMPLETE
+}
+pub fn isContextLost(_: *const WebGLRenderingContext) bool {
+    return false;
+}
+pub fn isEnabled(_: *const WebGLRenderingContext, _: js.Value) bool {
+    return false;
+}
+pub fn glIsObject(_: *const WebGLRenderingContext, _: js.Value) bool {
+    return true;
+}
+
+// The readback buffer types readPixels can be handed (mirrors the crypto
+// RandomValues shape; integer arrays cover the common UNSIGNED_BYTE path).
+const PixelBuffer = union(enum) {
+    int8: []i8,
+    uint8: []u8,
+    int16: []i16,
+    uint16: []u16,
+    int32: []i32,
+    uint32: []u32,
+    float32: []f32,
+
+    fn asBytes(self: PixelBuffer) []u8 {
+        return switch (self) {
+            .int8 => |b| @as([*]u8, @ptrCast(b.ptr))[0..b.len],
+            .uint8 => |b| b,
+            .int16 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 2],
+            .uint16 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 2],
+            .int32 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 4],
+            .uint32 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 4],
+            .float32 => |b| @as([*]u8, @ptrCast(b.ptr))[0 .. b.len * 4],
+        };
+    }
+};
+
+// Fills the caller's pixel buffer with per-session deterministic noise (seeded
+// from _seed), so the WebGL image hash is stable within a session but differs
+// across sessions. Never throws (a real gl.readPixels doesn't).
+pub fn readPixels(
+    self: *const WebGLRenderingContext,
+    _: js.Value,
+    _: js.Value,
+    _: js.Value,
+    _: js.Value,
+    _: js.Value,
+    _: js.Value,
+    pixels: js.Object,
+) !void {
+    var into = pixels.toZig(PixelBuffer) catch return;
+    const buf = into.asBytes();
+    if (buf.len == 0) return;
+    var prng = std.Random.DefaultPrng.init(self._seed);
+    const rand = prng.random();
+    var i: usize = 0;
+    while (i + 4 <= buf.len) : (i += 4) {
+        buf[i] = rand.int(u8);
+        buf[i + 1] = rand.int(u8);
+        buf[i + 2] = rand.int(u8);
+        buf[i + 3] = 255; // opaque
+    }
+    while (i < buf.len) : (i += 1) buf[i] = rand.int(u8);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(WebGLRenderingContext);
 
@@ -271,6 +440,133 @@ pub const JsApi = struct {
     pub const getSupportedExtensions = bridge.function(WebGLRenderingContext.getSupportedExtensions, .{});
     pub const getContextAttributes = bridge.function(WebGLRenderingContext.getContextAttributes, .{});
     pub const getShaderPrecisionFormat = bridge.function(WebGLRenderingContext.getShaderPrecisionFormat, .{});
+
+    // stealthpanda: gl.canvas / drawing buffer size.
+    pub const canvas = bridge.accessor(WebGLRenderingContext.getCanvas, null, .{});
+    pub const drawingBufferWidth = bridge.accessor(WebGLRenderingContext.getDrawingBufferWidth, null, .{});
+    pub const drawingBufferHeight = bridge.accessor(WebGLRenderingContext.getDrawingBufferHeight, null, .{});
+
+    // stealthpanda: WebGL render stubs (return values).
+    pub const createShader = bridge.function(WebGLRenderingContext.createShader, .{});
+    pub const createProgram = bridge.function(WebGLRenderingContext.createProgram, .{});
+    pub const createBuffer = bridge.function(WebGLRenderingContext.createBuffer, .{});
+    pub const createTexture = bridge.function(WebGLRenderingContext.createTexture, .{});
+    pub const createFramebuffer = bridge.function(WebGLRenderingContext.createFramebuffer, .{});
+    pub const createRenderbuffer = bridge.function(WebGLRenderingContext.createRenderbuffer, .{});
+    pub const getUniformLocation = bridge.function(WebGLRenderingContext.getUniformLocation, .{});
+    pub const getAttribLocation = bridge.function(WebGLRenderingContext.getAttribLocation, .{});
+    pub const getError = bridge.function(WebGLRenderingContext.getError, .{});
+    pub const getShaderParameter = bridge.function(WebGLRenderingContext.getShaderParameter, .{});
+    pub const getProgramParameter = bridge.function(WebGLRenderingContext.getProgramParameter, .{});
+    pub const getShaderInfoLog = bridge.function(WebGLRenderingContext.getShaderInfoLog, .{});
+    pub const getProgramInfoLog = bridge.function(WebGLRenderingContext.getProgramInfoLog, .{});
+    pub const getShaderSource = bridge.function(WebGLRenderingContext.getShaderSource, .{});
+    pub const checkFramebufferStatus = bridge.function(WebGLRenderingContext.checkFramebufferStatus, .{});
+    pub const isContextLost = bridge.function(WebGLRenderingContext.isContextLost, .{});
+    pub const isEnabled = bridge.function(WebGLRenderingContext.isEnabled, .{});
+    pub const isBuffer = bridge.function(WebGLRenderingContext.glIsObject, .{});
+    pub const isProgram = bridge.function(WebGLRenderingContext.glIsObject, .{});
+    pub const isShader = bridge.function(WebGLRenderingContext.glIsObject, .{});
+    pub const isTexture = bridge.function(WebGLRenderingContext.glIsObject, .{});
+    pub const isFramebuffer = bridge.function(WebGLRenderingContext.glIsObject, .{});
+    pub const isRenderbuffer = bridge.function(WebGLRenderingContext.glIsObject, .{});
+    pub const readPixels = bridge.function(WebGLRenderingContext.readPixels, .{});
+    // stealthpanda: WebGL render stubs (no-ops; args ignored via .noop).
+    pub const activeTexture = bridge.function(glNoop, .{ .noop = true });
+    pub const attachShader = bridge.function(glNoop, .{ .noop = true });
+    pub const bindAttribLocation = bridge.function(glNoop, .{ .noop = true });
+    pub const bindBuffer = bridge.function(glNoop, .{ .noop = true });
+    pub const bindFramebuffer = bridge.function(glNoop, .{ .noop = true });
+    pub const bindRenderbuffer = bridge.function(glNoop, .{ .noop = true });
+    pub const bindTexture = bridge.function(glNoop, .{ .noop = true });
+    pub const blendColor = bridge.function(glNoop, .{ .noop = true });
+    pub const blendEquation = bridge.function(glNoop, .{ .noop = true });
+    pub const blendEquationSeparate = bridge.function(glNoop, .{ .noop = true });
+    pub const blendFunc = bridge.function(glNoop, .{ .noop = true });
+    pub const blendFuncSeparate = bridge.function(glNoop, .{ .noop = true });
+    pub const bufferData = bridge.function(glNoop, .{ .noop = true });
+    pub const bufferSubData = bridge.function(glNoop, .{ .noop = true });
+    pub const clear = bridge.function(glNoop, .{ .noop = true });
+    pub const clearColor = bridge.function(glNoop, .{ .noop = true });
+    pub const clearDepth = bridge.function(glNoop, .{ .noop = true });
+    pub const clearStencil = bridge.function(glNoop, .{ .noop = true });
+    pub const colorMask = bridge.function(glNoop, .{ .noop = true });
+    pub const compileShader = bridge.function(glNoop, .{ .noop = true });
+    pub const copyTexImage2D = bridge.function(glNoop, .{ .noop = true });
+    pub const copyTexSubImage2D = bridge.function(glNoop, .{ .noop = true });
+    pub const cullFace = bridge.function(glNoop, .{ .noop = true });
+    pub const deleteBuffer = bridge.function(glNoop, .{ .noop = true });
+    pub const deleteFramebuffer = bridge.function(glNoop, .{ .noop = true });
+    pub const deleteProgram = bridge.function(glNoop, .{ .noop = true });
+    pub const deleteRenderbuffer = bridge.function(glNoop, .{ .noop = true });
+    pub const deleteShader = bridge.function(glNoop, .{ .noop = true });
+    pub const deleteTexture = bridge.function(glNoop, .{ .noop = true });
+    pub const depthFunc = bridge.function(glNoop, .{ .noop = true });
+    pub const depthMask = bridge.function(glNoop, .{ .noop = true });
+    pub const depthRange = bridge.function(glNoop, .{ .noop = true });
+    pub const detachShader = bridge.function(glNoop, .{ .noop = true });
+    pub const disable = bridge.function(glNoop, .{ .noop = true });
+    pub const disableVertexAttribArray = bridge.function(glNoop, .{ .noop = true });
+    pub const drawArrays = bridge.function(glNoop, .{ .noop = true });
+    pub const drawElements = bridge.function(glNoop, .{ .noop = true });
+    pub const enable = bridge.function(glNoop, .{ .noop = true });
+    pub const enableVertexAttribArray = bridge.function(glNoop, .{ .noop = true });
+    pub const finish = bridge.function(glNoop, .{ .noop = true });
+    pub const flush = bridge.function(glNoop, .{ .noop = true });
+    pub const framebufferRenderbuffer = bridge.function(glNoop, .{ .noop = true });
+    pub const framebufferTexture2D = bridge.function(glNoop, .{ .noop = true });
+    pub const frontFace = bridge.function(glNoop, .{ .noop = true });
+    pub const generateMipmap = bridge.function(glNoop, .{ .noop = true });
+    pub const hint = bridge.function(glNoop, .{ .noop = true });
+    pub const lineWidth = bridge.function(glNoop, .{ .noop = true });
+    pub const linkProgram = bridge.function(glNoop, .{ .noop = true });
+    pub const pixelStorei = bridge.function(glNoop, .{ .noop = true });
+    pub const polygonOffset = bridge.function(glNoop, .{ .noop = true });
+    pub const renderbufferStorage = bridge.function(glNoop, .{ .noop = true });
+    pub const sampleCoverage = bridge.function(glNoop, .{ .noop = true });
+    pub const scissor = bridge.function(glNoop, .{ .noop = true });
+    pub const shaderSource = bridge.function(glNoop, .{ .noop = true });
+    pub const stencilFunc = bridge.function(glNoop, .{ .noop = true });
+    pub const stencilFuncSeparate = bridge.function(glNoop, .{ .noop = true });
+    pub const stencilMask = bridge.function(glNoop, .{ .noop = true });
+    pub const stencilMaskSeparate = bridge.function(glNoop, .{ .noop = true });
+    pub const stencilOp = bridge.function(glNoop, .{ .noop = true });
+    pub const stencilOpSeparate = bridge.function(glNoop, .{ .noop = true });
+    pub const texImage2D = bridge.function(glNoop, .{ .noop = true });
+    pub const texParameterf = bridge.function(glNoop, .{ .noop = true });
+    pub const texParameteri = bridge.function(glNoop, .{ .noop = true });
+    pub const texSubImage2D = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform1f = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform1fv = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform1i = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform1iv = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform2f = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform2fv = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform2i = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform2iv = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform3f = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform3fv = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform3i = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform3iv = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform4f = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform4fv = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform4i = bridge.function(glNoop, .{ .noop = true });
+    pub const uniform4iv = bridge.function(glNoop, .{ .noop = true });
+    pub const uniformMatrix2fv = bridge.function(glNoop, .{ .noop = true });
+    pub const uniformMatrix3fv = bridge.function(glNoop, .{ .noop = true });
+    pub const uniformMatrix4fv = bridge.function(glNoop, .{ .noop = true });
+    pub const useProgram = bridge.function(glNoop, .{ .noop = true });
+    pub const validateProgram = bridge.function(glNoop, .{ .noop = true });
+    pub const vertexAttrib1f = bridge.function(glNoop, .{ .noop = true });
+    pub const vertexAttrib1fv = bridge.function(glNoop, .{ .noop = true });
+    pub const vertexAttrib2f = bridge.function(glNoop, .{ .noop = true });
+    pub const vertexAttrib2fv = bridge.function(glNoop, .{ .noop = true });
+    pub const vertexAttrib3f = bridge.function(glNoop, .{ .noop = true });
+    pub const vertexAttrib3fv = bridge.function(glNoop, .{ .noop = true });
+    pub const vertexAttrib4f = bridge.function(glNoop, .{ .noop = true });
+    pub const vertexAttrib4fv = bridge.function(glNoop, .{ .noop = true });
+    pub const vertexAttribPointer = bridge.function(glNoop, .{ .noop = true });
+    pub const viewport = bridge.function(glNoop, .{ .noop = true });
 
     // stealthpanda: the full WebGL 1.0 enum constant set. Real fingerprint
     // scripts use `gl.getParameter(gl.VENDOR)` etc.; without these the
