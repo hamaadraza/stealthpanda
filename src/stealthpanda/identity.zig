@@ -55,6 +55,14 @@ pub const Identity = struct {
     // so an Apple-Metal renderer is coherent with the macOS identity.
     webgl_vendor: [:0]const u8,
     webgl_renderer: [:0]const u8,
+    // navigator.userAgentData.getHighEntropyValues fields. `arch`/`bitness`
+    // reflect the real CPU behind the (frozen) UA — on Apple Silicon Chrome
+    // reports "arm"/"64", coherent with the Apple-Metal WebGL renderer above
+    // even though the UA string still says "Intel". `platform_version` is the
+    // macOS version high-entropy reports.
+    arch: [:0]const u8,
+    bitness: [:0]const u8,
+    platform_version: [:0]const u8,
 };
 
 // curl-impersonate ships one fixed UA per desktop Chrome target, all on macOS.
@@ -96,6 +104,9 @@ const chrome131 = Identity{
     .full_version_list = &chrome131_fvl,
     .webgl_vendor = "Google Inc. (Apple)",
     .webgl_renderer = "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)",
+    .arch = "arm",
+    .bitness = "64",
+    .platform_version = "15.1.0",
 };
 const chrome136 = Identity{
     .user_agent = mac_ua_prefix ++ "136" ++ mac_ua_suffix,
@@ -111,6 +122,9 @@ const chrome136 = Identity{
     .full_version_list = &chrome136_fvl,
     .webgl_vendor = "Google Inc. (Apple)",
     .webgl_renderer = "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)",
+    .arch = "arm",
+    .bitness = "64",
+    .platform_version = "15.4.0",
 };
 
 /// Identity for a curl-impersonate profile name, or null when we have no

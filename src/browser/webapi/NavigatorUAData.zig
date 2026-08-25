@@ -76,10 +76,13 @@ pub fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8
         .brands = activeBrands(exec),
         .mobile = if (id) |i| i.mobile else false,
         .platform = if (id) |i| i.ua_platform else uaPlatform(),
-        .architecture = uaArchitecture(),
-        .bitness = uaBitness(),
+        // stealthpanda: when impersonating, arch/bitness/platformVersion come
+        // from the identity profile (e.g. "arm"/"64" for Apple Silicon, coherent
+        // with the Apple-Metal WebGL renderer) rather than the build host's CPU.
+        .architecture = if (id) |i| i.arch else uaArchitecture(),
+        .bitness = if (id) |i| i.bitness else uaBitness(),
         .model = "",
-        .platformVersion = "",
+        .platformVersion = if (id) |i| i.platform_version else "",
         .uaFullVersion = if (full_version_list.len > 0) full_version_list[0].version else "1.0.0.0",
         .fullVersionList = full_version_list,
         .wow64 = false,

@@ -209,6 +209,53 @@ pub fn getSupportedExtensions(_: *const WebGLRenderingContext) []const []const u
     return std.meta.fieldNames(Extension.Kind);
 }
 
+/// getContextAttributes() — the options the context was created with. A real
+/// WebGL context always has this method; its absence (undefined) is a headless
+/// tell. Fixed to Chrome's defaults.
+pub fn getContextAttributes(_: *const WebGLRenderingContext) struct {
+    alpha: bool,
+    antialias: bool,
+    depth: bool,
+    desynchronized: bool,
+    failIfMajorPerformanceCaveat: bool,
+    powerPreference: []const u8,
+    premultipliedAlpha: bool,
+    preserveDrawingBuffer: bool,
+    stencil: bool,
+    xrCompatible: bool,
+} {
+    return .{
+        .alpha = true,
+        .antialias = true,
+        .depth = true,
+        .desynchronized = false,
+        .failIfMajorPerformanceCaveat = false,
+        .powerPreference = "default",
+        .premultipliedAlpha = true,
+        .preserveDrawingBuffer = false,
+        .stencil = false,
+        .xrCompatible = false,
+    };
+}
+
+/// getShaderPrecisionFormat(shaderType, precisionType) → {rangeMin, rangeMax,
+/// precision}. Desktop Chrome/ANGLE promotes every float precision to highp
+/// (127/127/23); integer precisions report 31/30/0. Another primary WebGL
+/// fingerprint, and a missing method is a tell.
+pub fn getShaderPrecisionFormat(_: *const WebGLRenderingContext, shader_type: u32, precision_type: u32) struct {
+    rangeMin: i32,
+    rangeMax: i32,
+    precision: i32,
+} {
+    _ = shader_type;
+    return switch (precision_type) {
+        // LOW_INT / MEDIUM_INT / HIGH_INT
+        0x8DF3, 0x8DF4, 0x8DF5 => .{ .rangeMin = 31, .rangeMax = 30, .precision = 0 },
+        // LOW_FLOAT / MEDIUM_FLOAT / HIGH_FLOAT (and anything else)
+        else => .{ .rangeMin = 127, .rangeMax = 127, .precision = 23 },
+    };
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(WebGLRenderingContext);
 
@@ -222,6 +269,314 @@ pub const JsApi = struct {
     pub const getParameter = bridge.function(WebGLRenderingContext.getParameter, .{});
     pub const getExtension = bridge.function(WebGLRenderingContext.getExtension, .{});
     pub const getSupportedExtensions = bridge.function(WebGLRenderingContext.getSupportedExtensions, .{});
+    pub const getContextAttributes = bridge.function(WebGLRenderingContext.getContextAttributes, .{});
+    pub const getShaderPrecisionFormat = bridge.function(WebGLRenderingContext.getShaderPrecisionFormat, .{});
+
+    // stealthpanda: the full WebGL 1.0 enum constant set. Real fingerprint
+    // scripts use `gl.getParameter(gl.VENDOR)` etc.; without these the
+    // constant reads undefined -> getParameter(0) -> null, and enumerating
+    // the prototype yields far fewer keys than a real context. Values are
+    // the standard GLenums.
+    pub const DEPTH_BUFFER_BIT = bridge.property(0x100, .{ .template = false, .readonly = true });
+    pub const STENCIL_BUFFER_BIT = bridge.property(0x400, .{ .template = false, .readonly = true });
+    pub const COLOR_BUFFER_BIT = bridge.property(0x4000, .{ .template = false, .readonly = true });
+    pub const POINTS = bridge.property(0x0, .{ .template = false, .readonly = true });
+    pub const LINES = bridge.property(0x1, .{ .template = false, .readonly = true });
+    pub const LINE_LOOP = bridge.property(0x2, .{ .template = false, .readonly = true });
+    pub const LINE_STRIP = bridge.property(0x3, .{ .template = false, .readonly = true });
+    pub const TRIANGLES = bridge.property(0x4, .{ .template = false, .readonly = true });
+    pub const TRIANGLE_STRIP = bridge.property(0x5, .{ .template = false, .readonly = true });
+    pub const TRIANGLE_FAN = bridge.property(0x6, .{ .template = false, .readonly = true });
+    pub const ZERO = bridge.property(0x0, .{ .template = false, .readonly = true });
+    pub const ONE = bridge.property(0x1, .{ .template = false, .readonly = true });
+    pub const SRC_COLOR = bridge.property(0x300, .{ .template = false, .readonly = true });
+    pub const ONE_MINUS_SRC_COLOR = bridge.property(0x301, .{ .template = false, .readonly = true });
+    pub const SRC_ALPHA = bridge.property(0x302, .{ .template = false, .readonly = true });
+    pub const ONE_MINUS_SRC_ALPHA = bridge.property(0x303, .{ .template = false, .readonly = true });
+    pub const DST_ALPHA = bridge.property(0x304, .{ .template = false, .readonly = true });
+    pub const ONE_MINUS_DST_ALPHA = bridge.property(0x305, .{ .template = false, .readonly = true });
+    pub const DST_COLOR = bridge.property(0x306, .{ .template = false, .readonly = true });
+    pub const ONE_MINUS_DST_COLOR = bridge.property(0x307, .{ .template = false, .readonly = true });
+    pub const SRC_ALPHA_SATURATE = bridge.property(0x308, .{ .template = false, .readonly = true });
+    pub const FUNC_ADD = bridge.property(0x8006, .{ .template = false, .readonly = true });
+    pub const BLEND_EQUATION = bridge.property(0x8009, .{ .template = false, .readonly = true });
+    pub const BLEND_EQUATION_RGB = bridge.property(0x8009, .{ .template = false, .readonly = true });
+    pub const BLEND_EQUATION_ALPHA = bridge.property(0x883D, .{ .template = false, .readonly = true });
+    pub const FUNC_SUBTRACT = bridge.property(0x800A, .{ .template = false, .readonly = true });
+    pub const FUNC_REVERSE_SUBTRACT = bridge.property(0x800B, .{ .template = false, .readonly = true });
+    pub const BLEND_DST_RGB = bridge.property(0x80C8, .{ .template = false, .readonly = true });
+    pub const BLEND_SRC_RGB = bridge.property(0x80C9, .{ .template = false, .readonly = true });
+    pub const BLEND_DST_ALPHA = bridge.property(0x80CA, .{ .template = false, .readonly = true });
+    pub const BLEND_SRC_ALPHA = bridge.property(0x80CB, .{ .template = false, .readonly = true });
+    pub const CONSTANT_COLOR = bridge.property(0x8001, .{ .template = false, .readonly = true });
+    pub const ONE_MINUS_CONSTANT_COLOR = bridge.property(0x8002, .{ .template = false, .readonly = true });
+    pub const CONSTANT_ALPHA = bridge.property(0x8003, .{ .template = false, .readonly = true });
+    pub const ONE_MINUS_CONSTANT_ALPHA = bridge.property(0x8004, .{ .template = false, .readonly = true });
+    pub const BLEND_COLOR = bridge.property(0x8005, .{ .template = false, .readonly = true });
+    pub const ARRAY_BUFFER = bridge.property(0x8892, .{ .template = false, .readonly = true });
+    pub const ELEMENT_ARRAY_BUFFER = bridge.property(0x8893, .{ .template = false, .readonly = true });
+    pub const ARRAY_BUFFER_BINDING = bridge.property(0x8894, .{ .template = false, .readonly = true });
+    pub const ELEMENT_ARRAY_BUFFER_BINDING = bridge.property(0x8895, .{ .template = false, .readonly = true });
+    pub const STREAM_DRAW = bridge.property(0x88E0, .{ .template = false, .readonly = true });
+    pub const STATIC_DRAW = bridge.property(0x88E4, .{ .template = false, .readonly = true });
+    pub const DYNAMIC_DRAW = bridge.property(0x88E8, .{ .template = false, .readonly = true });
+    pub const BUFFER_SIZE = bridge.property(0x8764, .{ .template = false, .readonly = true });
+    pub const BUFFER_USAGE = bridge.property(0x8765, .{ .template = false, .readonly = true });
+    pub const CURRENT_VERTEX_ATTRIB = bridge.property(0x8626, .{ .template = false, .readonly = true });
+    pub const FRONT = bridge.property(0x404, .{ .template = false, .readonly = true });
+    pub const BACK = bridge.property(0x405, .{ .template = false, .readonly = true });
+    pub const FRONT_AND_BACK = bridge.property(0x408, .{ .template = false, .readonly = true });
+    pub const CULL_FACE = bridge.property(0xB44, .{ .template = false, .readonly = true });
+    pub const BLEND = bridge.property(0xBE2, .{ .template = false, .readonly = true });
+    pub const DITHER = bridge.property(0xBD0, .{ .template = false, .readonly = true });
+    pub const STENCIL_TEST = bridge.property(0xB90, .{ .template = false, .readonly = true });
+    pub const DEPTH_TEST = bridge.property(0xB71, .{ .template = false, .readonly = true });
+    pub const SCISSOR_TEST = bridge.property(0xC11, .{ .template = false, .readonly = true });
+    pub const POLYGON_OFFSET_FILL = bridge.property(0x8037, .{ .template = false, .readonly = true });
+    pub const SAMPLE_ALPHA_TO_COVERAGE = bridge.property(0x809E, .{ .template = false, .readonly = true });
+    pub const SAMPLE_COVERAGE = bridge.property(0x80A0, .{ .template = false, .readonly = true });
+    pub const NO_ERROR = bridge.property(0x0, .{ .template = false, .readonly = true });
+    pub const INVALID_ENUM = bridge.property(0x500, .{ .template = false, .readonly = true });
+    pub const INVALID_VALUE = bridge.property(0x501, .{ .template = false, .readonly = true });
+    pub const INVALID_OPERATION = bridge.property(0x502, .{ .template = false, .readonly = true });
+    pub const OUT_OF_MEMORY = bridge.property(0x505, .{ .template = false, .readonly = true });
+    pub const INVALID_FRAMEBUFFER_OPERATION = bridge.property(0x506, .{ .template = false, .readonly = true });
+    pub const CW = bridge.property(0x900, .{ .template = false, .readonly = true });
+    pub const CCW = bridge.property(0x901, .{ .template = false, .readonly = true });
+    pub const LINE_WIDTH = bridge.property(0xB21, .{ .template = false, .readonly = true });
+    pub const ALIASED_POINT_SIZE_RANGE = bridge.property(0x846D, .{ .template = false, .readonly = true });
+    pub const ALIASED_LINE_WIDTH_RANGE = bridge.property(0x846E, .{ .template = false, .readonly = true });
+    pub const CULL_FACE_MODE = bridge.property(0xB45, .{ .template = false, .readonly = true });
+    pub const FRONT_FACE = bridge.property(0xB46, .{ .template = false, .readonly = true });
+    pub const DEPTH_RANGE = bridge.property(0xB70, .{ .template = false, .readonly = true });
+    pub const DEPTH_WRITEMASK = bridge.property(0xB72, .{ .template = false, .readonly = true });
+    pub const DEPTH_CLEAR_VALUE = bridge.property(0xB73, .{ .template = false, .readonly = true });
+    pub const DEPTH_FUNC = bridge.property(0xB74, .{ .template = false, .readonly = true });
+    pub const STENCIL_CLEAR_VALUE = bridge.property(0xB91, .{ .template = false, .readonly = true });
+    pub const STENCIL_FUNC = bridge.property(0xB92, .{ .template = false, .readonly = true });
+    pub const STENCIL_FAIL = bridge.property(0xB94, .{ .template = false, .readonly = true });
+    pub const STENCIL_PASS_DEPTH_FAIL = bridge.property(0xB95, .{ .template = false, .readonly = true });
+    pub const STENCIL_PASS_DEPTH_PASS = bridge.property(0xB96, .{ .template = false, .readonly = true });
+    pub const STENCIL_REF = bridge.property(0xB97, .{ .template = false, .readonly = true });
+    pub const STENCIL_VALUE_MASK = bridge.property(0xB93, .{ .template = false, .readonly = true });
+    pub const STENCIL_WRITEMASK = bridge.property(0xB98, .{ .template = false, .readonly = true });
+    pub const STENCIL_BACK_FUNC = bridge.property(0x8800, .{ .template = false, .readonly = true });
+    pub const STENCIL_BACK_FAIL = bridge.property(0x8801, .{ .template = false, .readonly = true });
+    pub const STENCIL_BACK_PASS_DEPTH_FAIL = bridge.property(0x8802, .{ .template = false, .readonly = true });
+    pub const STENCIL_BACK_PASS_DEPTH_PASS = bridge.property(0x8803, .{ .template = false, .readonly = true });
+    pub const STENCIL_BACK_REF = bridge.property(0x8CA3, .{ .template = false, .readonly = true });
+    pub const STENCIL_BACK_VALUE_MASK = bridge.property(0x8CA4, .{ .template = false, .readonly = true });
+    pub const STENCIL_BACK_WRITEMASK = bridge.property(0x8CA5, .{ .template = false, .readonly = true });
+    pub const VIEWPORT = bridge.property(0xBA2, .{ .template = false, .readonly = true });
+    pub const SCISSOR_BOX = bridge.property(0xC10, .{ .template = false, .readonly = true });
+    pub const COLOR_CLEAR_VALUE = bridge.property(0xC22, .{ .template = false, .readonly = true });
+    pub const COLOR_WRITEMASK = bridge.property(0xC23, .{ .template = false, .readonly = true });
+    pub const UNPACK_ALIGNMENT = bridge.property(0xCF5, .{ .template = false, .readonly = true });
+    pub const PACK_ALIGNMENT = bridge.property(0xD05, .{ .template = false, .readonly = true });
+    pub const MAX_TEXTURE_SIZE = bridge.property(0xD33, .{ .template = false, .readonly = true });
+    pub const MAX_VIEWPORT_DIMS = bridge.property(0xD3A, .{ .template = false, .readonly = true });
+    pub const SUBPIXEL_BITS = bridge.property(0xD50, .{ .template = false, .readonly = true });
+    pub const RED_BITS = bridge.property(0xD52, .{ .template = false, .readonly = true });
+    pub const GREEN_BITS = bridge.property(0xD53, .{ .template = false, .readonly = true });
+    pub const BLUE_BITS = bridge.property(0xD54, .{ .template = false, .readonly = true });
+    pub const ALPHA_BITS = bridge.property(0xD55, .{ .template = false, .readonly = true });
+    pub const DEPTH_BITS = bridge.property(0xD56, .{ .template = false, .readonly = true });
+    pub const STENCIL_BITS = bridge.property(0xD57, .{ .template = false, .readonly = true });
+    pub const POLYGON_OFFSET_UNITS = bridge.property(0x2A00, .{ .template = false, .readonly = true });
+    pub const POLYGON_OFFSET_FACTOR = bridge.property(0x8038, .{ .template = false, .readonly = true });
+    pub const TEXTURE_BINDING_2D = bridge.property(0x8069, .{ .template = false, .readonly = true });
+    pub const SAMPLE_BUFFERS = bridge.property(0x80A8, .{ .template = false, .readonly = true });
+    pub const SAMPLES = bridge.property(0x80A9, .{ .template = false, .readonly = true });
+    pub const SAMPLE_COVERAGE_VALUE = bridge.property(0x80AA, .{ .template = false, .readonly = true });
+    pub const SAMPLE_COVERAGE_INVERT = bridge.property(0x80AB, .{ .template = false, .readonly = true });
+    pub const COMPRESSED_TEXTURE_FORMATS = bridge.property(0x86A3, .{ .template = false, .readonly = true });
+    pub const NUM_COMPRESSED_TEXTURE_FORMATS = bridge.property(0x86A2, .{ .template = false, .readonly = true });
+    pub const DONT_CARE = bridge.property(0x1100, .{ .template = false, .readonly = true });
+    pub const FASTEST = bridge.property(0x1101, .{ .template = false, .readonly = true });
+    pub const NICEST = bridge.property(0x1102, .{ .template = false, .readonly = true });
+    pub const GENERATE_MIPMAP_HINT = bridge.property(0x8192, .{ .template = false, .readonly = true });
+    pub const BYTE = bridge.property(0x1400, .{ .template = false, .readonly = true });
+    pub const UNSIGNED_BYTE = bridge.property(0x1401, .{ .template = false, .readonly = true });
+    pub const SHORT = bridge.property(0x1402, .{ .template = false, .readonly = true });
+    pub const UNSIGNED_SHORT = bridge.property(0x1403, .{ .template = false, .readonly = true });
+    pub const INT = bridge.property(0x1404, .{ .template = false, .readonly = true });
+    pub const UNSIGNED_INT = bridge.property(0x1405, .{ .template = false, .readonly = true });
+    pub const FLOAT = bridge.property(0x1406, .{ .template = false, .readonly = true });
+    pub const DEPTH_COMPONENT = bridge.property(0x1902, .{ .template = false, .readonly = true });
+    pub const ALPHA = bridge.property(0x1906, .{ .template = false, .readonly = true });
+    pub const RGB = bridge.property(0x1907, .{ .template = false, .readonly = true });
+    pub const RGBA = bridge.property(0x1908, .{ .template = false, .readonly = true });
+    pub const LUMINANCE = bridge.property(0x1909, .{ .template = false, .readonly = true });
+    pub const LUMINANCE_ALPHA = bridge.property(0x190A, .{ .template = false, .readonly = true });
+    pub const UNSIGNED_SHORT_4_4_4_4 = bridge.property(0x8033, .{ .template = false, .readonly = true });
+    pub const UNSIGNED_SHORT_5_5_5_1 = bridge.property(0x8034, .{ .template = false, .readonly = true });
+    pub const UNSIGNED_SHORT_5_6_5 = bridge.property(0x8363, .{ .template = false, .readonly = true });
+    pub const FRAGMENT_SHADER = bridge.property(0x8B30, .{ .template = false, .readonly = true });
+    pub const VERTEX_SHADER = bridge.property(0x8B31, .{ .template = false, .readonly = true });
+    pub const MAX_VERTEX_ATTRIBS = bridge.property(0x8869, .{ .template = false, .readonly = true });
+    pub const MAX_VERTEX_UNIFORM_VECTORS = bridge.property(0x8DFB, .{ .template = false, .readonly = true });
+    pub const MAX_VARYING_VECTORS = bridge.property(0x8DFC, .{ .template = false, .readonly = true });
+    pub const MAX_COMBINED_TEXTURE_IMAGE_UNITS = bridge.property(0x8B4D, .{ .template = false, .readonly = true });
+    pub const MAX_VERTEX_TEXTURE_IMAGE_UNITS = bridge.property(0x8B4C, .{ .template = false, .readonly = true });
+    pub const MAX_TEXTURE_IMAGE_UNITS = bridge.property(0x8872, .{ .template = false, .readonly = true });
+    pub const MAX_FRAGMENT_UNIFORM_VECTORS = bridge.property(0x8DFD, .{ .template = false, .readonly = true });
+    pub const SHADER_TYPE = bridge.property(0x8B4F, .{ .template = false, .readonly = true });
+    pub const DELETE_STATUS = bridge.property(0x8B80, .{ .template = false, .readonly = true });
+    pub const LINK_STATUS = bridge.property(0x8B82, .{ .template = false, .readonly = true });
+    pub const VALIDATE_STATUS = bridge.property(0x8B83, .{ .template = false, .readonly = true });
+    pub const ATTACHED_SHADERS = bridge.property(0x8B85, .{ .template = false, .readonly = true });
+    pub const ACTIVE_UNIFORMS = bridge.property(0x8B86, .{ .template = false, .readonly = true });
+    pub const ACTIVE_ATTRIBUTES = bridge.property(0x8B89, .{ .template = false, .readonly = true });
+    pub const SHADING_LANGUAGE_VERSION = bridge.property(0x8B8C, .{ .template = false, .readonly = true });
+    pub const CURRENT_PROGRAM = bridge.property(0x8B8D, .{ .template = false, .readonly = true });
+    pub const COMPILE_STATUS = bridge.property(0x8B81, .{ .template = false, .readonly = true });
+    pub const NEVER = bridge.property(0x200, .{ .template = false, .readonly = true });
+    pub const LESS = bridge.property(0x201, .{ .template = false, .readonly = true });
+    pub const EQUAL = bridge.property(0x202, .{ .template = false, .readonly = true });
+    pub const LEQUAL = bridge.property(0x203, .{ .template = false, .readonly = true });
+    pub const GREATER = bridge.property(0x204, .{ .template = false, .readonly = true });
+    pub const NOTEQUAL = bridge.property(0x205, .{ .template = false, .readonly = true });
+    pub const GEQUAL = bridge.property(0x206, .{ .template = false, .readonly = true });
+    pub const ALWAYS = bridge.property(0x207, .{ .template = false, .readonly = true });
+    pub const KEEP = bridge.property(0x1E00, .{ .template = false, .readonly = true });
+    pub const REPLACE = bridge.property(0x1E01, .{ .template = false, .readonly = true });
+    pub const INCR = bridge.property(0x1E02, .{ .template = false, .readonly = true });
+    pub const DECR = bridge.property(0x1E03, .{ .template = false, .readonly = true });
+    pub const INVERT = bridge.property(0x150A, .{ .template = false, .readonly = true });
+    pub const INCR_WRAP = bridge.property(0x8507, .{ .template = false, .readonly = true });
+    pub const DECR_WRAP = bridge.property(0x8508, .{ .template = false, .readonly = true });
+    pub const VENDOR = bridge.property(0x1F00, .{ .template = false, .readonly = true });
+    pub const RENDERER = bridge.property(0x1F01, .{ .template = false, .readonly = true });
+    pub const VERSION = bridge.property(0x1F02, .{ .template = false, .readonly = true });
+    pub const NEAREST = bridge.property(0x2600, .{ .template = false, .readonly = true });
+    pub const LINEAR = bridge.property(0x2601, .{ .template = false, .readonly = true });
+    pub const NEAREST_MIPMAP_NEAREST = bridge.property(0x2700, .{ .template = false, .readonly = true });
+    pub const LINEAR_MIPMAP_NEAREST = bridge.property(0x2701, .{ .template = false, .readonly = true });
+    pub const NEAREST_MIPMAP_LINEAR = bridge.property(0x2702, .{ .template = false, .readonly = true });
+    pub const LINEAR_MIPMAP_LINEAR = bridge.property(0x2703, .{ .template = false, .readonly = true });
+    pub const TEXTURE_MAG_FILTER = bridge.property(0x2800, .{ .template = false, .readonly = true });
+    pub const TEXTURE_MIN_FILTER = bridge.property(0x2801, .{ .template = false, .readonly = true });
+    pub const TEXTURE_WRAP_S = bridge.property(0x2802, .{ .template = false, .readonly = true });
+    pub const TEXTURE_WRAP_T = bridge.property(0x2803, .{ .template = false, .readonly = true });
+    pub const TEXTURE_2D = bridge.property(0xDE1, .{ .template = false, .readonly = true });
+    pub const TEXTURE = bridge.property(0x1702, .{ .template = false, .readonly = true });
+    pub const TEXTURE_CUBE_MAP = bridge.property(0x8513, .{ .template = false, .readonly = true });
+    pub const TEXTURE_BINDING_CUBE_MAP = bridge.property(0x8514, .{ .template = false, .readonly = true });
+    pub const TEXTURE_CUBE_MAP_POSITIVE_X = bridge.property(0x8515, .{ .template = false, .readonly = true });
+    pub const TEXTURE_CUBE_MAP_NEGATIVE_X = bridge.property(0x8516, .{ .template = false, .readonly = true });
+    pub const TEXTURE_CUBE_MAP_POSITIVE_Y = bridge.property(0x8517, .{ .template = false, .readonly = true });
+    pub const TEXTURE_CUBE_MAP_NEGATIVE_Y = bridge.property(0x8518, .{ .template = false, .readonly = true });
+    pub const TEXTURE_CUBE_MAP_POSITIVE_Z = bridge.property(0x8519, .{ .template = false, .readonly = true });
+    pub const TEXTURE_CUBE_MAP_NEGATIVE_Z = bridge.property(0x851A, .{ .template = false, .readonly = true });
+    pub const MAX_CUBE_MAP_TEXTURE_SIZE = bridge.property(0x851C, .{ .template = false, .readonly = true });
+    pub const ACTIVE_TEXTURE = bridge.property(0x84E0, .{ .template = false, .readonly = true });
+    pub const REPEAT = bridge.property(0x2901, .{ .template = false, .readonly = true });
+    pub const CLAMP_TO_EDGE = bridge.property(0x812F, .{ .template = false, .readonly = true });
+    pub const MIRRORED_REPEAT = bridge.property(0x8370, .{ .template = false, .readonly = true });
+    pub const FLOAT_VEC2 = bridge.property(0x8B50, .{ .template = false, .readonly = true });
+    pub const FLOAT_VEC3 = bridge.property(0x8B51, .{ .template = false, .readonly = true });
+    pub const FLOAT_VEC4 = bridge.property(0x8B52, .{ .template = false, .readonly = true });
+    pub const INT_VEC2 = bridge.property(0x8B53, .{ .template = false, .readonly = true });
+    pub const INT_VEC3 = bridge.property(0x8B54, .{ .template = false, .readonly = true });
+    pub const INT_VEC4 = bridge.property(0x8B55, .{ .template = false, .readonly = true });
+    pub const BOOL = bridge.property(0x8B56, .{ .template = false, .readonly = true });
+    pub const BOOL_VEC2 = bridge.property(0x8B57, .{ .template = false, .readonly = true });
+    pub const BOOL_VEC3 = bridge.property(0x8B58, .{ .template = false, .readonly = true });
+    pub const BOOL_VEC4 = bridge.property(0x8B59, .{ .template = false, .readonly = true });
+    pub const FLOAT_MAT2 = bridge.property(0x8B5A, .{ .template = false, .readonly = true });
+    pub const FLOAT_MAT3 = bridge.property(0x8B5B, .{ .template = false, .readonly = true });
+    pub const FLOAT_MAT4 = bridge.property(0x8B5C, .{ .template = false, .readonly = true });
+    pub const SAMPLER_2D = bridge.property(0x8B5E, .{ .template = false, .readonly = true });
+    pub const SAMPLER_CUBE = bridge.property(0x8B60, .{ .template = false, .readonly = true });
+    pub const VERTEX_ATTRIB_ARRAY_ENABLED = bridge.property(0x8622, .{ .template = false, .readonly = true });
+    pub const VERTEX_ATTRIB_ARRAY_SIZE = bridge.property(0x8623, .{ .template = false, .readonly = true });
+    pub const VERTEX_ATTRIB_ARRAY_STRIDE = bridge.property(0x8624, .{ .template = false, .readonly = true });
+    pub const VERTEX_ATTRIB_ARRAY_TYPE = bridge.property(0x8625, .{ .template = false, .readonly = true });
+    pub const VERTEX_ATTRIB_ARRAY_NORMALIZED = bridge.property(0x886A, .{ .template = false, .readonly = true });
+    pub const VERTEX_ATTRIB_ARRAY_POINTER = bridge.property(0x8645, .{ .template = false, .readonly = true });
+    pub const VERTEX_ATTRIB_ARRAY_BUFFER_BINDING = bridge.property(0x889F, .{ .template = false, .readonly = true });
+    pub const IMPLEMENTATION_COLOR_READ_TYPE = bridge.property(0x8B9A, .{ .template = false, .readonly = true });
+    pub const IMPLEMENTATION_COLOR_READ_FORMAT = bridge.property(0x8B9B, .{ .template = false, .readonly = true });
+    pub const LOW_FLOAT = bridge.property(0x8DF0, .{ .template = false, .readonly = true });
+    pub const MEDIUM_FLOAT = bridge.property(0x8DF1, .{ .template = false, .readonly = true });
+    pub const HIGH_FLOAT = bridge.property(0x8DF2, .{ .template = false, .readonly = true });
+    pub const LOW_INT = bridge.property(0x8DF3, .{ .template = false, .readonly = true });
+    pub const MEDIUM_INT = bridge.property(0x8DF4, .{ .template = false, .readonly = true });
+    pub const HIGH_INT = bridge.property(0x8DF5, .{ .template = false, .readonly = true });
+    pub const MAX_VERTEX_UNIFORM_COMPONENTS = bridge.property(0x8B4A, .{ .template = false, .readonly = true });
+    pub const FRAMEBUFFER = bridge.property(0x8D40, .{ .template = false, .readonly = true });
+    pub const RENDERBUFFER = bridge.property(0x8D41, .{ .template = false, .readonly = true });
+    pub const RGBA4 = bridge.property(0x8056, .{ .template = false, .readonly = true });
+    pub const RGB5_A1 = bridge.property(0x8057, .{ .template = false, .readonly = true });
+    pub const RGB565 = bridge.property(0x8D62, .{ .template = false, .readonly = true });
+    pub const DEPTH_COMPONENT16 = bridge.property(0x81A5, .{ .template = false, .readonly = true });
+    pub const STENCIL_INDEX8 = bridge.property(0x8D48, .{ .template = false, .readonly = true });
+    pub const DEPTH_STENCIL = bridge.property(0x84F9, .{ .template = false, .readonly = true });
+    pub const RENDERBUFFER_WIDTH = bridge.property(0x8D42, .{ .template = false, .readonly = true });
+    pub const RENDERBUFFER_HEIGHT = bridge.property(0x8D43, .{ .template = false, .readonly = true });
+    pub const RENDERBUFFER_INTERNAL_FORMAT = bridge.property(0x8D44, .{ .template = false, .readonly = true });
+    pub const RENDERBUFFER_RED_SIZE = bridge.property(0x8D50, .{ .template = false, .readonly = true });
+    pub const RENDERBUFFER_GREEN_SIZE = bridge.property(0x8D51, .{ .template = false, .readonly = true });
+    pub const RENDERBUFFER_BLUE_SIZE = bridge.property(0x8D52, .{ .template = false, .readonly = true });
+    pub const RENDERBUFFER_ALPHA_SIZE = bridge.property(0x8D53, .{ .template = false, .readonly = true });
+    pub const RENDERBUFFER_DEPTH_SIZE = bridge.property(0x8D54, .{ .template = false, .readonly = true });
+    pub const RENDERBUFFER_STENCIL_SIZE = bridge.property(0x8D55, .{ .template = false, .readonly = true });
+    pub const FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE = bridge.property(0x8CD0, .{ .template = false, .readonly = true });
+    pub const FRAMEBUFFER_ATTACHMENT_OBJECT_NAME = bridge.property(0x8CD1, .{ .template = false, .readonly = true });
+    pub const FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL = bridge.property(0x8CD2, .{ .template = false, .readonly = true });
+    pub const FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE = bridge.property(0x8CD3, .{ .template = false, .readonly = true });
+    pub const COLOR_ATTACHMENT0 = bridge.property(0x8CE0, .{ .template = false, .readonly = true });
+    pub const DEPTH_ATTACHMENT = bridge.property(0x8D00, .{ .template = false, .readonly = true });
+    pub const STENCIL_ATTACHMENT = bridge.property(0x8D20, .{ .template = false, .readonly = true });
+    pub const DEPTH_STENCIL_ATTACHMENT = bridge.property(0x821A, .{ .template = false, .readonly = true });
+    pub const NONE = bridge.property(0x0, .{ .template = false, .readonly = true });
+    pub const FRAMEBUFFER_COMPLETE = bridge.property(0x8CD5, .{ .template = false, .readonly = true });
+    pub const FRAMEBUFFER_INCOMPLETE_ATTACHMENT = bridge.property(0x8CD6, .{ .template = false, .readonly = true });
+    pub const FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT = bridge.property(0x8CD7, .{ .template = false, .readonly = true });
+    pub const FRAMEBUFFER_INCOMPLETE_DIMENSIONS = bridge.property(0x8CD9, .{ .template = false, .readonly = true });
+    pub const FRAMEBUFFER_UNSUPPORTED = bridge.property(0x8CDD, .{ .template = false, .readonly = true });
+    pub const FRAMEBUFFER_BINDING = bridge.property(0x8CA6, .{ .template = false, .readonly = true });
+    pub const RENDERBUFFER_BINDING = bridge.property(0x8CA7, .{ .template = false, .readonly = true });
+    pub const MAX_RENDERBUFFER_SIZE = bridge.property(0x84E8, .{ .template = false, .readonly = true });
+    pub const UNPACK_FLIP_Y_WEBGL = bridge.property(0x9240, .{ .template = false, .readonly = true });
+    pub const UNPACK_PREMULTIPLY_ALPHA_WEBGL = bridge.property(0x9241, .{ .template = false, .readonly = true });
+    pub const CONTEXT_LOST_WEBGL = bridge.property(0x9242, .{ .template = false, .readonly = true });
+    pub const UNPACK_COLORSPACE_CONVERSION_WEBGL = bridge.property(0x9243, .{ .template = false, .readonly = true });
+    pub const BROWSER_DEFAULT_WEBGL = bridge.property(0x9244, .{ .template = false, .readonly = true });
+    pub const TEXTURE0 = bridge.property(0x84C0, .{ .template = false, .readonly = true });
+    pub const TEXTURE1 = bridge.property(0x84C1, .{ .template = false, .readonly = true });
+    pub const TEXTURE2 = bridge.property(0x84C2, .{ .template = false, .readonly = true });
+    pub const TEXTURE3 = bridge.property(0x84C3, .{ .template = false, .readonly = true });
+    pub const TEXTURE4 = bridge.property(0x84C4, .{ .template = false, .readonly = true });
+    pub const TEXTURE5 = bridge.property(0x84C5, .{ .template = false, .readonly = true });
+    pub const TEXTURE6 = bridge.property(0x84C6, .{ .template = false, .readonly = true });
+    pub const TEXTURE7 = bridge.property(0x84C7, .{ .template = false, .readonly = true });
+    pub const TEXTURE8 = bridge.property(0x84C8, .{ .template = false, .readonly = true });
+    pub const TEXTURE9 = bridge.property(0x84C9, .{ .template = false, .readonly = true });
+    pub const TEXTURE10 = bridge.property(0x84CA, .{ .template = false, .readonly = true });
+    pub const TEXTURE11 = bridge.property(0x84CB, .{ .template = false, .readonly = true });
+    pub const TEXTURE12 = bridge.property(0x84CC, .{ .template = false, .readonly = true });
+    pub const TEXTURE13 = bridge.property(0x84CD, .{ .template = false, .readonly = true });
+    pub const TEXTURE14 = bridge.property(0x84CE, .{ .template = false, .readonly = true });
+    pub const TEXTURE15 = bridge.property(0x84CF, .{ .template = false, .readonly = true });
+    pub const TEXTURE16 = bridge.property(0x84D0, .{ .template = false, .readonly = true });
+    pub const TEXTURE17 = bridge.property(0x84D1, .{ .template = false, .readonly = true });
+    pub const TEXTURE18 = bridge.property(0x84D2, .{ .template = false, .readonly = true });
+    pub const TEXTURE19 = bridge.property(0x84D3, .{ .template = false, .readonly = true });
+    pub const TEXTURE20 = bridge.property(0x84D4, .{ .template = false, .readonly = true });
+    pub const TEXTURE21 = bridge.property(0x84D5, .{ .template = false, .readonly = true });
+    pub const TEXTURE22 = bridge.property(0x84D6, .{ .template = false, .readonly = true });
+    pub const TEXTURE23 = bridge.property(0x84D7, .{ .template = false, .readonly = true });
+    pub const TEXTURE24 = bridge.property(0x84D8, .{ .template = false, .readonly = true });
+    pub const TEXTURE25 = bridge.property(0x84D9, .{ .template = false, .readonly = true });
+    pub const TEXTURE26 = bridge.property(0x84DA, .{ .template = false, .readonly = true });
+    pub const TEXTURE27 = bridge.property(0x84DB, .{ .template = false, .readonly = true });
+    pub const TEXTURE28 = bridge.property(0x84DC, .{ .template = false, .readonly = true });
+    pub const TEXTURE29 = bridge.property(0x84DD, .{ .template = false, .readonly = true });
+    pub const TEXTURE30 = bridge.property(0x84DE, .{ .template = false, .readonly = true });
+    pub const TEXTURE31 = bridge.property(0x84DF, .{ .template = false, .readonly = true });
+    pub const TRUE = bridge.property(0x1, .{ .template = false, .readonly = true });
+    pub const FALSE = bridge.property(0x0, .{ .template = false, .readonly = true });
 };
 
 // getContext('web-gl') currently returns null, so this cannot be tested

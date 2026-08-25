@@ -129,6 +129,26 @@ pub fn getProduct(_: *const Navigator) []const u8 {
     return "Gecko";
 }
 
+// stealthpanda: Chrome/WebKit report a frozen productSub "20030107" and an
+// empty vendorSub. undefined off-path (honest Lightpanda doesn't expose them).
+pub fn getProductSub(_: *const Navigator, exec: *const Execution) ?[]const u8 {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return "20030107";
+}
+
+pub fn getVendorSub(_: *const Navigator, exec: *const Execution) ?[]const u8 {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return "";
+}
+
+// stealthpanda: Chrome ships the internal PDF viewer, so navigator
+// .pdfViewerEnabled is true (and coherent with the PDF plugins we surface).
+// undefined off-path.
+pub fn getPdfViewerEnabled(_: *const Navigator, exec: *const Execution) ?bool {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return true;
+}
+
 pub fn getWebdriver(_: *const Navigator) bool {
     return false;
 }
@@ -317,6 +337,10 @@ pub const JsApi = struct {
     pub const maxTouchPoints = bridge.accessor(Navigator.getMaxTouchPoints, null, .{});
     pub const vendor = bridge.accessor(Navigator.getVendor, null, .{});
     pub const product = bridge.accessor(Navigator.getProduct, null, .{});
+    // stealthpanda: productSub / vendorSub / pdfViewerEnabled (undefined off-path).
+    pub const productSub = bridge.accessor(Navigator.getProductSub, null, .{ .null_as_undefined = true });
+    pub const vendorSub = bridge.accessor(Navigator.getVendorSub, null, .{ .null_as_undefined = true });
+    pub const pdfViewerEnabled = bridge.accessor(Navigator.getPdfViewerEnabled, null, .{ .null_as_undefined = true });
     pub const webdriver = bridge.accessor(Navigator.getWebdriver, null, .{});
     pub const doNotTrack = bridge.accessor(Navigator.getDoNotTrack, null, .{});
     pub const globalPrivacyControl = bridge.accessor(Navigator.getGlobalPrivacyControl, null, .{});
