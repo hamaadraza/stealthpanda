@@ -229,6 +229,11 @@ const CommonOptions = .{
     // stealthpanda: curl-impersonate browser profile (e.g. chrome131). Only
     // effective in a -Dtls_impersonate build; "off" disables it for the run.
     .{ .name = "tls_impersonate", .type = ?[:0]const u8 },
+    // stealthpanda: IANA timezone (e.g. America/New_York) and geolocation
+    // ("lat,lon[,accuracy]") to report when impersonating, so they match the
+    // proxy egress instead of the host's UTC / "permission denied".
+    .{ .name = "timezone", .type = ?[:0]const u8 },
+    .{ .name = "geolocation", .type = ?[:0]const u8 },
     .{ .name = "log_level", .type = ?log.Level, .validator = logLevelValidator },
     .{ .name = "log_format", .type = ?log.Format },
     .{ .name = "log_filter_scopes", .type = log.FilterRule, .multiple = true, .validator = logFilterScopesValidator },
@@ -512,6 +517,38 @@ pub fn tlsImpersonate(self: *const Config) ?[:0]const u8 {
     const profile = configured orelse impersonate.default_profile;
     if (impersonate.isDisabled(profile)) return null;
     return profile;
+}
+
+/// stealthpanda: coordinates for navigator.geolocation when impersonating.
+pub const GeoLocation = struct { latitude: f64, longitude: f64, accuracy: f64 };
+
+/// stealthpanda: IANA timezone to pin for this run, or null off-path (keep the
+/// host's). When impersonating, defaults to a US zone coherent with the en-US
+/// macOS identity; override with --timezone to match the proxy's country.
+pub fn timezone(self: *const Config) ?[:0]const u8 {
+    if (self.tlsImpersonate() == null) return null;
+    const configured: ?[:0]const u8 = switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.timezone,
+        else => null,
+    };
+    return configured orelse "America/New_York";
+}
+
+/// stealthpanda: parsed --geolocation ("lat,lon[,accuracy]"), or null when not
+/// impersonating / not configured / unparseable.
+pub fn geolocation(self: *const Config) ?GeoLocation {
+    if (self.tlsImpersonate() == null) return null;
+    const raw: ?[:0]const u8 = switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.geolocation,
+        else => null,
+    };
+    const s = raw orelse return null;
+    var it = std.mem.tokenizeScalar(u8, s, ',');
+    const lat = std.fmt.parseFloat(f64, std.mem.trim(u8, it.next() orelse return null, " ")) catch return null;
+    const lon = std.fmt.parseFloat(f64, std.mem.trim(u8, it.next() orelse return null, " ")) catch return null;
+    const acc = if (it.next()) |a| (std.fmt.parseFloat(f64, std.mem.trim(u8, a, " ")) catch 100.0) else 100.0;
+    if (lat < -90 or lat > 90 or lon < -180 or lon > 180) return null;
+    return .{ .latitude = lat, .longitude = lon, .accuracy = acc };
 }
 
 pub fn disableSubframes(self: *const Config) bool {

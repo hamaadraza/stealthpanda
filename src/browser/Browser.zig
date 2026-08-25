@@ -130,6 +130,18 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
     self.env.protectHeapLimit();
     try self.http_client.init(app, cdp);
 
+    // stealthpanda: when impersonating with a configured geolocation, grant the
+    // permission and set the override so navigator.geolocation returns those
+    // coordinates (coherent with the timezone/proxy) instead of "User denied".
+    if (app.config.geolocation()) |geo| {
+        self.geolocation_override = .{
+            .latitude = geo.latitude,
+            .longitude = geo.longitude,
+            .accuracy = geo.accuracy,
+        };
+        try self.setPermission("geolocation", .granted);
+    }
+
     self.watchdog_entry = .{
         .env = &self.env,
         .heartbeat = &self.http_client.heartbeat,

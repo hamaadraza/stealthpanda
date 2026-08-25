@@ -95,6 +95,12 @@ fn run(allocator: Allocator, main_arena: Allocator, proc_args: std.process.Args)
     sighandler.* = .{ .arena = main_arena };
     try sighandler.install();
 
+    // stealthpanda: pin the timezone before V8/ICU initializes (in App.init),
+    // so Intl/Date report the impersonated zone instead of the host's UTC.
+    if (args.timezone()) |tz| {
+        @import("stealthpanda/geo.zig").setProcessTimezone(tz);
+    }
+
     // _app is global to handle graceful shutdown.
     var app = try App.init(allocator, &args);
     defer app.deinit();
