@@ -81,7 +81,7 @@ pub fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?Draw
 
     const drawing_context: DrawingContext = blk: {
         if (std.mem.eql(u8, context_type, "2d")) {
-            const ctx = try frame._factory.create(CanvasRenderingContext2D{ ._canvas = self });
+            const ctx = try frame._factory.create(CanvasRenderingContext2D{ ._canvas = self, ._frame = frame });
             break :blk .{ .@"2d" = ctx };
         }
 
@@ -119,12 +119,38 @@ fn hasBitmap(self: *const Canvas) bool {
     return BlankPNG.hasBitmap(self.getWidth(), self.getHeight());
 }
 
-/// Serializes the canvas, always as the blank PNG. Per spec an unsupported
-/// `type` falls back to image/png, and with nothing drawn there is no lossy
-/// encoding for `quality` to control, so both arguments are ignored.
-pub fn toDataURL(self: *const Canvas, _: ?[]const u8, _: ?f64) []const u8 {
+/// Serializes the canvas. Off-path, upstream's blank PNG (Lightpanda has no
+/// renderer). stealthpanda: when impersonating, the recorded 2D draw ops are
+/// software-rasterized (tiny-skia) into a real, correctly-sized PNG — a 1x1
+/// blank canvas under a Chrome identity is a loud fingerprint tell.
+pub fn toDataURL(self: *const Canvas, _: ?[]const u8, _: ?f64, exec: *Execution) ![]const u8 {
+    if (exec.session.browser.http_client.impersonateIdentity() != null) {
+        if (try self.renderDataURL(exec)) |data_url| return data_url;
+    }
     // Per spec, a canvas with no pixels serializes to this exact string.
     return if (self.hasBitmap()) BlankPNG.data_url else "data:,";
+}
+
+// stealthpanda: rasterize the 2D context's op stream to a PNG data URL, or null
+// to fall back (0-sized canvas, WebGL context, or a render error).
+fn renderDataURL(self: *const Canvas, exec: *Execution) !?[]const u8 {
+    const canvas_raster = @import("../../../../stealthpanda/canvas_raster.zig");
+    const w = self.getWidth();
+    const h = self.getHeight();
+    if (w == 0 or h == 0) return null;
+
+    const draw_ops: []const u8 = if (self._cached) |cached| switch (cached) {
+        .@"2d" => |ctx| ctx.ops(),
+        .webgl => return null,
+    } else &.{};
+
+    const png = (try canvas_raster.renderPng(exec.local_arena, draw_ops, w, h)) orelse return null;
+    const enc = std.base64.standard.Encoder;
+    const prefix = "data:image/png;base64,";
+    const out = try exec.local_arena.alloc(u8, prefix.len + enc.calcSize(png.len));
+    @memcpy(out[0..prefix.len], prefix);
+    _ = enc.encode(out[prefix.len..], png);
+    return out;
 }
 
 /// Same image as `toDataURL`, handed to `callback` as a Blob from a task.

@@ -24,6 +24,9 @@ const color = @import("../../color.zig");
 
 const Canvas = @import("../element/html/Canvas.zig");
 const ImageData = @import("../ImageData.zig");
+const Frame = @import("../../Frame.zig");
+// stealthpanda: software canvas rasterizer op stream.
+const canvas_raster = @import("../../../stealthpanda/canvas_raster.zig");
 
 const Execution = js.Execution;
 
@@ -38,8 +41,78 @@ _canvas: *Canvas,
 /// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
 _fill_style: color.RGBA = color.RGBA.Named.black,
 
+// stealthpanda: the owning frame (for the page-lifetime arena and the
+// impersonation check), set by Canvas.getContext, and the recorded draw-op
+// stream that the software rasterizer replays at toDataURL/getImageData time.
+_frame: *Frame = undefined,
+_ops: std.ArrayListUnmanaged(u8) = .empty,
+// stealthpanda: text state (CSS font shorthand + textBaseline), tracked in Zig
+// so fillText can record the pixel size and baseline for the rasterizer.
+_font: []const u8 = "10px sans-serif",
+_text_baseline: []const u8 = "alphabetic",
+
 pub fn getCanvas(self: *const CanvasRenderingContext2D) *Canvas {
     return self._canvas;
+}
+
+// stealthpanda: op-stream recording (little-endian; see canvas_raster.Op).
+fn emitU8(self: *CanvasRenderingContext2D, v: u8) !void {
+    try self._ops.append(self._frame.arena, v);
+}
+fn emitU32(self: *CanvasRenderingContext2D, v: u32) !void {
+    var buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &buf, v, .little);
+    try self._ops.appendSlice(self._frame.arena, &buf);
+}
+fn emitF32(self: *CanvasRenderingContext2D, v: f32) !void {
+    try self.emitU32(@bitCast(v));
+}
+fn emitRgba(self: *CanvasRenderingContext2D, c: color.RGBA) !void {
+    try self._ops.appendSlice(self._frame.arena, &[4]u8{ c.r, c.g, c.b, c.a });
+}
+fn emitCurrentFill(self: *CanvasRenderingContext2D) !void {
+    try self.emitU8(@intFromEnum(canvas_raster.Op.set_fill));
+    try self.emitRgba(self._fill_style);
+}
+
+/// The recorded op stream (consumed by the rasterizer).
+pub fn ops(self: *const CanvasRenderingContext2D) []const u8 {
+    return self._ops.items;
+}
+
+// stealthpanda: font / textBaseline are Zig-backed accessors (were data
+// properties) so the recorder can read the current text state.
+pub fn getFont(self: *const CanvasRenderingContext2D) []const u8 {
+    return self._font;
+}
+pub fn setFont(self: *CanvasRenderingContext2D, value: []const u8) !void {
+    self._font = try self._frame.arena.dupe(u8, value);
+}
+pub fn getTextBaseline(self: *const CanvasRenderingContext2D) []const u8 {
+    return self._text_baseline;
+}
+pub fn setTextBaseline(self: *CanvasRenderingContext2D, value: []const u8) !void {
+    self._text_baseline = try self._frame.arena.dupe(u8, value);
+}
+
+// Extracts the pixel size from a CSS font shorthand ("bold 14px Arial" -> 14).
+// Supports px and pt; defaults to 10px.
+fn fontPx(font: []const u8) f32 {
+    var it = std.mem.tokenizeAny(u8, font, " \t");
+    while (it.next()) |tok| {
+        const unit: f32 = if (std.mem.endsWith(u8, tok, "px"))
+            1.0
+        else if (std.mem.endsWith(u8, tok, "pt"))
+            96.0 / 72.0
+        else
+            continue;
+        const num = tok[0 .. tok.len - 2];
+        // A font size can carry a "/line-height" suffix (e.g. 14px/1.5).
+        const digits = if (std.mem.indexOfScalar(u8, num, '/')) |slash| num[0..slash] else num;
+        const px = std.fmt.parseFloat(f32, digits) catch continue;
+        return px * unit;
+    }
+    return 10.0;
 }
 
 pub fn getFillStyle(self: *const CanvasRenderingContext2D, exec: *Execution) ![]const u8 {
@@ -110,8 +183,21 @@ pub fn transform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _
 pub fn setTransform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn resetTransform(_: *CanvasRenderingContext2D) void {}
 pub fn setStrokeStyle(_: *CanvasRenderingContext2D, _: []const u8) void {}
-pub fn clearRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn fillRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
+pub fn clearRect(self: *CanvasRenderingContext2D, x: f64, y: f64, w: f64, h: f64) void {
+    self.recordRect(canvas_raster.Op.clear_rect, x, y, w, h, false) catch {};
+}
+pub fn fillRect(self: *CanvasRenderingContext2D, x: f64, y: f64, w: f64, h: f64) void {
+    self.recordRect(canvas_raster.Op.fill_rect, x, y, w, h, true) catch {};
+}
+
+fn recordRect(self: *CanvasRenderingContext2D, op: canvas_raster.Op, x: f64, y: f64, w: f64, h: f64, with_fill: bool) !void {
+    if (with_fill) try self.emitCurrentFill();
+    try self.emitU8(@intFromEnum(op));
+    try self.emitF32(@floatCast(x));
+    try self.emitF32(@floatCast(y));
+    try self.emitF32(@floatCast(w));
+    try self.emitF32(@floatCast(h));
+}
 pub fn strokeRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn beginPath(_: *CanvasRenderingContext2D) void {}
 pub fn closePath(_: *CanvasRenderingContext2D) void {}
@@ -125,8 +211,50 @@ pub fn rect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {
 pub fn fill(_: *CanvasRenderingContext2D) void {}
 pub fn stroke(_: *CanvasRenderingContext2D) void {}
 pub fn clip(_: *CanvasRenderingContext2D) void {}
-pub fn fillText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
-pub fn strokeText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
+pub fn fillText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f64, _: ?f64) void {
+    self.recordText(text, x, y) catch {};
+}
+// stealthpanda: stroked text is approximated as filled text (outline-only
+// stroking isn't modeled yet); good enough to keep the canvas non-blank.
+pub fn strokeText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f64, _: ?f64) void {
+    self.recordText(text, x, y) catch {};
+}
+
+fn recordText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f64) !void {
+    try self.emitCurrentFill();
+    try self.emitU8(@intFromEnum(canvas_raster.Op.fill_text));
+    try self.emitF32(@floatCast(x));
+    try self.emitF32(@floatCast(y));
+    try self.emitU8(@intFromEnum(canvas_raster.Baseline.fromString(self._text_baseline)));
+    try self.emitF32(fontPx(self._font));
+    try self.emitU32(@intCast(text.len));
+    try self._ops.appendSlice(self._frame.arena, text);
+}
+
+const TextMetrics = struct {
+    width: f64,
+    actualBoundingBoxLeft: f64,
+    actualBoundingBoxRight: f64,
+    actualBoundingBoxAscent: f64,
+    actualBoundingBoxDescent: f64,
+    fontBoundingBoxAscent: f64,
+    fontBoundingBoxDescent: f64,
+};
+
+pub fn measureText(self: *const CanvasRenderingContext2D, text: []const u8) TextMetrics {
+    const px = fontPx(self._font);
+    const width: f64 = canvas_raster.measureText(text, px);
+    // Approximate the box metrics from the font size (Noto Sans-ish ratios).
+    return .{
+        .width = width,
+        .actualBoundingBoxLeft = 0,
+        .actualBoundingBoxRight = width,
+        .actualBoundingBoxAscent = @as(f64, px) * 0.75,
+        .actualBoundingBoxDescent = @as(f64, px) * 0.2,
+        .fontBoundingBoxAscent = @as(f64, px) * 0.93,
+        .fontBoundingBoxDescent = @as(f64, px) * 0.25,
+    };
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CanvasRenderingContext2D);
@@ -139,7 +267,11 @@ pub const JsApi = struct {
     };
 
     pub const canvas = bridge.accessor(CanvasRenderingContext2D.getCanvas, null, .{});
-    pub const font = bridge.property("10px sans-serif", .{ .template = false, .readonly = false });
+    // stealthpanda: font / textBaseline are Zig-backed accessors so fillText can
+    // read them (and, like Chrome, they live on the prototype, not as own data
+    // properties).
+    pub const font = bridge.accessor(CanvasRenderingContext2D.getFont, CanvasRenderingContext2D.setFont, .{});
+    pub const textBaseline = bridge.accessor(CanvasRenderingContext2D.getTextBaseline, CanvasRenderingContext2D.setTextBaseline, .{});
     pub const globalAlpha = bridge.property(1.0, .{ .template = false, .readonly = false });
     pub const globalCompositeOperation = bridge.property("source-over", .{ .template = false, .readonly = false });
     pub const strokeStyle = bridge.property("#000000", .{ .template = false, .readonly = false });
@@ -148,7 +280,6 @@ pub const JsApi = struct {
     pub const lineJoin = bridge.property("miter", .{ .template = false, .readonly = false });
     pub const miterLimit = bridge.property(10.0, .{ .template = false, .readonly = false });
     pub const textAlign = bridge.property("start", .{ .template = false, .readonly = false });
-    pub const textBaseline = bridge.property("alphabetic", .{ .template = false, .readonly = false });
 
     pub const fillStyle = bridge.accessor(CanvasRenderingContext2D.getFillStyle, CanvasRenderingContext2D.setFillStyle, .{});
     pub const createImageData = bridge.function(CanvasRenderingContext2D.createImageData, .{});
@@ -164,8 +295,8 @@ pub const JsApi = struct {
     pub const transform = bridge.function(CanvasRenderingContext2D.transform, .{ .noop = true });
     pub const setTransform = bridge.function(CanvasRenderingContext2D.setTransform, .{ .noop = true });
     pub const resetTransform = bridge.function(CanvasRenderingContext2D.resetTransform, .{ .noop = true });
-    pub const clearRect = bridge.function(CanvasRenderingContext2D.clearRect, .{ .noop = true });
-    pub const fillRect = bridge.function(CanvasRenderingContext2D.fillRect, .{ .noop = true });
+    pub const clearRect = bridge.function(CanvasRenderingContext2D.clearRect, .{});
+    pub const fillRect = bridge.function(CanvasRenderingContext2D.fillRect, .{});
     pub const strokeRect = bridge.function(CanvasRenderingContext2D.strokeRect, .{ .noop = true });
     pub const beginPath = bridge.function(CanvasRenderingContext2D.beginPath, .{ .noop = true });
     pub const closePath = bridge.function(CanvasRenderingContext2D.closePath, .{ .noop = true });
@@ -179,8 +310,9 @@ pub const JsApi = struct {
     pub const fill = bridge.function(CanvasRenderingContext2D.fill, .{ .noop = true });
     pub const stroke = bridge.function(CanvasRenderingContext2D.stroke, .{ .noop = true });
     pub const clip = bridge.function(CanvasRenderingContext2D.clip, .{ .noop = true });
-    pub const fillText = bridge.function(CanvasRenderingContext2D.fillText, .{ .noop = true });
-    pub const strokeText = bridge.function(CanvasRenderingContext2D.strokeText, .{ .noop = true });
+    pub const fillText = bridge.function(CanvasRenderingContext2D.fillText, .{});
+    pub const strokeText = bridge.function(CanvasRenderingContext2D.strokeText, .{});
+    pub const measureText = bridge.function(CanvasRenderingContext2D.measureText, .{});
 };
 
 const testing = @import("../../../testing.zig");

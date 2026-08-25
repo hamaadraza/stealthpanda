@@ -355,6 +355,8 @@ fn linkHtml5Ever(b: *Build, mod: *Build.Module) void {
         "src/html5ever/sink.rs",
         "src/html5ever/types.rs",
         "src/html5ever/url.rs",
+        // stealthpanda: canvas rasterizer module.
+        "src/html5ever/stealthpanda_canvas.rs",
     }) |path| {
         exec_cargo.addFileInput(b.path(path));
     }

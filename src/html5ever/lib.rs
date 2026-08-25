@@ -18,6 +18,8 @@
 
 mod prescan;
 mod sink;
+// stealthpanda: software canvas-2D rasterizer.
+mod stealthpanda_canvas;
 mod types;
 mod url;
 
