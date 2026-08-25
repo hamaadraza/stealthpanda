@@ -31,6 +31,7 @@ const Navigator = @import("Navigator.zig");
 const ModelContext = @import("ModelContext.zig");
 const Screen = @import("Screen.zig");
 const Chrome = @import("Chrome.zig");
+const SpeechSynthesis = @import("SpeechSynthesis.zig");
 const VisualViewport = @import("VisualViewport.zig");
 const Performance = @import("Performance.zig");
 const Document = @import("Document.zig");
@@ -75,6 +76,8 @@ _navigator: Navigator = .init,
 _model_context: ModelContext = .init,
 // stealthpanda: window.chrome, only surfaced when impersonating (getChrome).
 _chrome: Chrome = .{},
+// stealthpanda: window.speechSynthesis, only surfaced when impersonating.
+_speech_synthesis: SpeechSynthesis = .{},
 _screen: *Screen,
 _visual_viewport: *VisualViewport,
 _performance: Performance,
@@ -267,6 +270,34 @@ pub fn getScreen(self: *Window) *Screen {
 pub fn getChrome(self: *Window, exec: *const Execution) ?*Chrome {
     if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
     return &self._chrome;
+}
+
+// stealthpanda: window.speechSynthesis — present only when impersonating (an
+// honest Lightpanda doesn't fake the Web Speech API; undefined off-path).
+pub fn getSpeechSynthesis(self: *Window, exec: *const Execution) ?*SpeechSynthesis {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return &self._speech_synthesis;
+}
+
+// stealthpanda: isSecureContext. Off-path keeps Lightpanda's flat `false`. When
+// impersonating, report what Chrome reports: true for https/wss/file origins and
+// http loopback (localhost / 127.0.0.1 / [::1]). An https page with
+// isSecureContext=false is impossible in a real browser — a loud tell — and it
+// also gates APIs like Web Bluetooth.
+pub fn getIsSecureContext(self: *const Window, exec: *const Execution) bool {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return false;
+    const origin = self._frame.origin orelse return false;
+    if (std.mem.startsWith(u8, origin, "https://")) return true;
+    if (std.mem.startsWith(u8, origin, "wss://")) return true;
+    if (std.mem.startsWith(u8, origin, "file://")) return true;
+    const rest = if (std.mem.startsWith(u8, origin, "http://")) origin["http://".len..] else return false;
+    var end: usize = 0;
+    while (end < rest.len and rest[end] != ':' and rest[end] != '/') : (end += 1) {}
+    const host = rest[0..end];
+    if (std.mem.eql(u8, host, "localhost") or std.mem.endsWith(u8, host, ".localhost")) return true;
+    if (std.mem.eql(u8, host, "127.0.0.1")) return true;
+    if (std.mem.eql(u8, host, "[::1]")) return true;
+    return false;
 }
 
 pub fn setScreen(self: *Window, value: js.Value) void {
@@ -1206,6 +1237,8 @@ pub const JsApi = struct {
     pub const screen = bridge.accessor(Window.getScreen, Window.setScreen, .{});
     // stealthpanda: window.chrome (undefined unless impersonating).
     pub const chrome = bridge.accessor(Window.getChrome, null, .{ .null_as_undefined = true });
+    // stealthpanda: window.speechSynthesis (undefined unless impersonating).
+    pub const speechSynthesis = bridge.accessor(Window.getSpeechSynthesis, null, .{ .null_as_undefined = true });
     pub const visualViewport = bridge.accessor(Window.getVisualViewport, Window.setVisualViewport, .{});
     pub const performance = bridge.accessor(Window.getPerformance, Window.setPerformance, .{});
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{});
@@ -1266,11 +1299,11 @@ pub const JsApi = struct {
     pub const scroll = bridge.function(Window.scrollTo, .{});
     pub const scrollBy = bridge.function(Window.scrollBy, .{});
 
-    // Return false since we don't have secure-context-only APIs implemented
-    // (webcam, geolocation, clipboard, etc.)
-    // This is safer and could help avoid processing errors by hinting at
-    // sites not to try to access those features
-    pub const isSecureContext = bridge.property(false, .{ .template = false });
+    // Off-path returns false (we don't implement secure-context-only APIs like
+    // webcam/clipboard, and false discourages sites from trying). stealthpanda:
+    // when impersonating it reports the real value for the origin, since an
+    // https page with isSecureContext=false is an impossible-state tell.
+    pub const isSecureContext = bridge.accessor(Window.getIsSecureContext, null, .{});
 
     // [Replaceable] (CSSOM-View): the getter reads the page's runtime viewport
     // (overridable via Emulation.setDeviceMetricsOverride); the setter overwrites

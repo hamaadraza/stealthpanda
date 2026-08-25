@@ -154,9 +154,18 @@
 </script>
 
 <script id=getBattery type=module>
-  // Like Firefox, we don't expose navigator.getBattery. Sites already
-  // have to handle it being undefined, so this is a real-browser shape
-  // rather than a stub that always rejects.
-  testing.expectEqual('undefined', typeof navigator.getBattery);
+  // stealthpanda: the fork exposes navigator.getBattery as a native method
+  // (Chrome ships the Battery Status API; a Chrome identity with getBattery
+  // missing is a bot signal). It's a native function unconditionally — the
+  // method cannot be runtime-gated without a JS shim that would betray itself
+  // via toString — and resolves a BatteryManager for a plugged-in, fully
+  // charged machine. (Upstream, Firefox-like, omitted it.)
+  testing.expectEqual('function', typeof navigator.getBattery);
+  navigator.getBattery().then(function (battery) {
+    testing.expectEqual(true, battery.charging);
+    testing.expectEqual(1, battery.level);
+    testing.expectEqual(0, battery.chargingTime);
+    testing.expectEqual(Infinity, battery.dischargingTime);
+  });
 </script>
 

@@ -31,6 +31,8 @@ const NavigatorUAData = @import("NavigatorUAData.zig");
 const Geolocation = @import("geolocation/Geolocation.zig");
 const NetworkInformation = @import("NetworkInformation.zig");
 const MediaDevices = @import("MediaDevices.zig");
+const BatteryManager = @import("BatteryManager.zig");
+const Bluetooth = @import("Bluetooth.zig");
 
 const Navigator = @This();
 
@@ -38,7 +40,7 @@ comptime {
     // Ensure we don't cause an identity map conflict. Because _geolocation is
     // lazy and, for now, Zig orders the highest-aligned field first, none of
     // the other fields land at offset 0.
-    for ([_][]const u8{ "_plugins", "_mime_types", "_connection", "_media_devices", "_permissions", "_storage", "_ua_data" }) |name| {
+    for ([_][]const u8{ "_plugins", "_mime_types", "_connection", "_media_devices", "_battery", "_bluetooth", "_permissions", "_storage", "_ua_data" }) |name| {
         if (@offsetOf(Navigator, name) == 0) @compileError(name ++ " aliases the Navigator");
     }
 }
@@ -55,6 +57,9 @@ _mime_types: PluginArray.MimeTypeArray = .{},
 // stealthpanda: navigator.connection / navigator.mediaDevices (impersonation-gated).
 _connection: NetworkInformation = .{},
 _media_devices: MediaDevices = .{},
+// stealthpanda: navigator.getBattery() singleton / navigator.bluetooth.
+_battery: BatteryManager = .{},
+_bluetooth: Bluetooth = .{},
 _permissions: Permissions = .{},
 _geolocation: ?*Geolocation = null,
 _storage: StorageManager = .{},
@@ -221,6 +226,19 @@ pub fn getMediaDevices(self: *Navigator, exec: *const Execution) ?*MediaDevices 
     return &self._media_devices;
 }
 
+// stealthpanda: navigator.getBattery() — resolves the shared BatteryManager
+// (real Chrome returns the same instance from every call).
+pub fn getBattery(self: *Navigator, exec: *const Execution) !js.Promise {
+    return exec.js.local.?.resolvePromise(&self._battery);
+}
+
+// stealthpanda: navigator.bluetooth — present only when impersonating (undefined
+// otherwise, like connection/mediaDevices).
+pub fn getBluetooth(self: *Navigator, exec: *const Execution) ?*Bluetooth {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return &self._bluetooth;
+}
+
 pub fn getPermissions(self: *Navigator) *Permissions {
     return &self._permissions;
 }
@@ -358,6 +376,10 @@ pub const JsApi = struct {
     // stealthpanda: navigator.connection / navigator.mediaDevices (undefined off-path).
     pub const connection = bridge.accessor(Navigator.getConnection, null, .{ .null_as_undefined = true });
     pub const mediaDevices = bridge.accessor(Navigator.getMediaDevices, null, .{ .null_as_undefined = true });
+    // stealthpanda: navigator.getBattery() / navigator.bluetooth (bluetooth
+    // undefined off-path).
+    pub const getBattery = bridge.function(Navigator.getBattery, .{});
+    pub const bluetooth = bridge.accessor(Navigator.getBluetooth, null, .{ .null_as_undefined = true });
     pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{ .exposed = .window });
     pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{ .exposed = .window });
     pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .exposed = .window });
