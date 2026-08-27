@@ -230,6 +230,18 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     const network_idle = activity.idle();
     const is_done = browser.hasMacrotasks() == false and network_idle;
 
+    // stealthpanda: a wait condition normally resolves as soon as its goal
+    // (load / networkidle / done) is met — and fetch returns well before
+    // --wait-ms. But anti-bot challenges (reCAPTCHA/BotGuard, Castle, iphey) do
+    // timer-paced computation that runs *after* load/idle and, past
+    // BLOCKING_NESTING timer levels, no longer "blocks completion"; resolving on
+    // the goal cuts that computation off before it produces a result (the
+    // poToken flow only worked because its back-to-back network kept the page
+    // non-idle). When impersonating, hold the resolution while ANY timer is
+    // still pending so the computation can finish — bounded by the --wait-ms
+    // timeout. Off-path (and every test) is unchanged.
+    const hold_for_timers = http_client.impersonateIdentity() != null and browser.msToNextTask() != null;
+
     // Outside the condition loop: it skips resolved conditions, but an idle
     // notification needs a check 500ms+ after the hold starts, and on a quiet
     // page one tick both starts the hold and resolves the condition. Before
@@ -296,8 +308,10 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
                 // still work in flight (network or pending macrotasks), keep
                 // ticking. `is_done` means the page went fully idle without
                 // reaching the goal — there's nothing left to wait on, so
-                // resolve rather than spin forever.
-                if (met or is_done) {
+                // resolve rather than spin forever. stealthpanda: `hold_for_timers`
+                // keeps an impersonated fetch ticking while timers are pending so
+                // timer-paced anti-bot computation can finish (bounded by --wait-ms).
+                if ((met or is_done) and hold_for_timers == false) {
                     condition.status = .complete;
                 } else {
                     want_http_tick = true;
