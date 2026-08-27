@@ -21,6 +21,7 @@ const js = @import("../../js/js.zig");
 
 const Blob = @import("../Blob.zig");
 const OffscreenCanvasRenderingContext2D = @import("OffscreenCanvasRenderingContext2D.zig");
+const WebGLRenderingContext = @import("WebGLRenderingContext.zig");
 
 const Execution = js.Execution;
 
@@ -36,6 +37,7 @@ _height: u32,
 /// we're using tagged union.
 const DrawingContext = union(enum) {
     @"2d": *OffscreenCanvasRenderingContext2D,
+    webgl: *WebGLRenderingContext,
 };
 
 pub fn constructor(width: u32, height: u32, exec: *Execution) !*OffscreenCanvas {
@@ -61,10 +63,25 @@ pub fn setHeight(self: *OffscreenCanvas, value: u32) void {
     self._height = value;
 }
 
-pub fn getContext(_: *OffscreenCanvas, context_type: []const u8, exec: *Execution) !?DrawingContext {
+pub fn getContext(self: *OffscreenCanvas, context_type: []const u8, exec: *Execution) !?DrawingContext {
     if (std.mem.eql(u8, context_type, "2d")) {
         const ctx = try exec._factory.create(OffscreenCanvasRenderingContext2D{});
         return .{ .@"2d" = ctx };
+    }
+
+    // stealthpanda: WebGL in a worker. Only when impersonating (matching the
+    // main-thread <canvas> gate); returns a context whose getParameter reports
+    // the same spoofed GPU vendor/renderer as the main thread, so the WebGL
+    // fingerprint is consistent across the main thread and a Web Worker (an
+    // inconsistency there is a bot tell). Seed from the session pointer, same as
+    // the main-thread context, so any readPixels noise matches too.
+    if (std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl")) {
+        if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+        const ctx = try exec._factory.create(WebGLRenderingContext{
+            ._seed = @intFromPtr(exec.session),
+            ._offscreen = self,
+        });
+        return .{ .webgl = ctx };
     }
 
     return null;

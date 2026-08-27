@@ -1300,6 +1300,11 @@ const worker_common_apis = [_]type{
     @import("../webapi/URLPattern.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),
     @import("../webapi/canvas/OffscreenCanvasRenderingContext2D.zig"),
+    // stealthpanda: WebGL in worker scope, so OffscreenCanvas.getContext("webgl")
+    // reports the same spoofed GPU vendor/renderer as the main thread (an
+    // inconsistency between the two is a bot tell — deviceandbrowserinfo's
+    // hasInconsistentWorkerValues).
+    @import("../webapi/canvas/WebGLRenderingContext.zig"),
     @import("../webapi/net/XMLHttpRequest.zig"),
     @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
     @import("../webapi/net/XMLHttpRequestUpload.zig"),

@@ -21,6 +21,7 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const Canvas = @import("../element/html/Canvas.zig");
+const OffscreenCanvas = @import("OffscreenCanvas.zig");
 const Execution = js.Execution;
 
 pub fn registerTypes() []const type {
@@ -49,7 +50,13 @@ const WebGLRenderingContext = @This();
 _seed: u64 = 0,
 // stealthpanda: back-reference to the owning canvas (gl.canvas /
 // gl.drawingBufferWidth/Height; fingerprint scripts read gl.canvas.width).
-_canvas: *Canvas = undefined,
+// Exactly one of these is set: `_canvas` for a main-thread <canvas>,
+// `_offscreen` for a worker OffscreenCanvas. A worker-thread WebGL context is
+// what keeps the WebGL vendor/renderer consistent between the main thread and a
+// Web Worker — an *inconsistency* there is a bot tell (deviceandbrowserinfo's
+// hasInconsistentWorkerValues).
+_canvas: ?*Canvas = null,
+_offscreen: ?*OffscreenCanvas = null,
 
 // stealthpanda: opaque WebGL handle objects. Real WebGL rendering needs a GPU
 // (a line even Cloudflare's Kitesurf doesn't cross), so we can't produce a
@@ -230,17 +237,19 @@ pub fn getParameter(_: *const WebGLRenderingContext, pname: u32, exec: *const Ex
     };
 }
 
-/// Enables a WebGL extension.
-pub fn getExtension(_: *const WebGLRenderingContext, name: []const u8, frame: *Frame) !?Extension {
+/// Enables a WebGL extension. Uses `exec` (not `frame`) so it also works in a
+/// Web Worker's OffscreenCanvas context — the fingerprint path reads the GPU
+/// strings via WEBGL_debug_renderer_info, and a worker has no Frame.
+pub fn getExtension(_: *const WebGLRenderingContext, name: []const u8, exec: *const Execution) !?Extension {
     const tag = Extension.find(name) orelse return null;
 
     return switch (tag) {
         .WEBGL_debug_renderer_info => {
-            const info = try frame._factory.create(Extension.Type.WEBGL_debug_renderer_info{});
+            const info = try exec._factory.create(Extension.Type.WEBGL_debug_renderer_info{});
             return .{ .WEBGL_debug_renderer_info = info };
         },
         .WEBGL_lose_context => {
-            const ctx = try frame._factory.create(Extension.Type.WEBGL_lose_context{});
+            const ctx = try exec._factory.create(Extension.Type.WEBGL_lose_context{});
             return .{ .WEBGL_lose_context = ctx };
         },
         inline else => |comptime_enum| @unionInit(Extension, @tagName(comptime_enum), {}),
@@ -304,14 +313,21 @@ pub fn getShaderPrecisionFormat(_: *const WebGLRenderingContext, shader_type: u3
 // stub ignores its arguments, so one nullary fn covers every arity.
 fn glNoop(_: *const WebGLRenderingContext) void {}
 
-pub fn getCanvas(self: *const WebGLRenderingContext) *Canvas {
-    return self._canvas;
+pub fn getCanvas(self: *const WebGLRenderingContext, exec: *const Execution) !js.Value {
+    const local = exec.js.local.?;
+    if (self._canvas) |c| return local.zigValueToJs(c, .{});
+    if (self._offscreen) |o| return local.zigValueToJs(o, .{});
+    return local.zigValueToJs(@as(?u8, null), .{});
 }
 pub fn getDrawingBufferWidth(self: *const WebGLRenderingContext) u32 {
-    return self._canvas.getWidth();
+    if (self._canvas) |c| return c.getWidth();
+    if (self._offscreen) |o| return o.getWidth();
+    return 0;
 }
 pub fn getDrawingBufferHeight(self: *const WebGLRenderingContext) u32 {
-    return self._canvas.getHeight();
+    if (self._canvas) |c| return c.getHeight();
+    if (self._offscreen) |o| return o.getHeight();
+    return 0;
 }
 
 // Handle factories — the render code chains these objects but never inspects
