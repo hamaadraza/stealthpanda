@@ -70,14 +70,33 @@ pub fn item(self: *const DOMTokenList, index: usize, frame: *Frame) !?[]const u8
 }
 
 /// https://dom.spec.whatwg.org/#dom-domtokenlist-supports
-/// Only `rel` defines supported tokens here; per spec every other backing
-/// attribute throws. Loaders probe `relList.supports("modulepreload")` and
-/// fall back to fetch()-based legacy loading when it fails.
+/// `rel` and `iframe.sandbox` define supported-token sets; per spec every other
+/// backing attribute (class, …) throws. Loaders probe
+/// `relList.supports("modulepreload")` and fall back to fetch()-based legacy
+/// loading when it fails.
+///
+/// stealthpanda: the `sandbox` case matters for stealth — reCAPTCHA calls
+/// `iframe.sandbox.supports("allow-...")` while wiring up its challenge iframe,
+/// and a throwing supports() aborts its whole token-generation flow (caught
+/// internally, so no error surfaces — the page just never produces a score).
+/// Real Chrome answers true/false for the HTML sandbox flags.
 pub fn supports(self: *const DOMTokenList, token: []const u8, frame: *Frame) !bool {
-    if (!std.ascii.eqlIgnoreCase(self._attribute_name.str(), "rel")) {
+    const attr = self._attribute_name.str();
+    const supported: []const []const u8 = if (std.ascii.eqlIgnoreCase(attr, "rel"))
+        &.{ "stylesheet", "preload", "modulepreload" }
+    else if (std.ascii.eqlIgnoreCase(attr, "sandbox"))
+        &.{
+            "allow-downloads",                          "allow-forms",
+            "allow-modals",                             "allow-orientation-lock",
+            "allow-pointer-lock",                       "allow-popups",
+            "allow-popups-to-escape-sandbox",           "allow-presentation",
+            "allow-same-origin",                        "allow-scripts",
+            "allow-storage-access-by-user-activation",  "allow-top-navigation",
+            "allow-top-navigation-by-user-activation",  "allow-top-navigation-to-custom-protocols",
+        }
+    else
         return error.TypeError;
-    }
-    const supported = [_][]const u8{ "stylesheet", "preload", "modulepreload" };
+
     const lower = try std.ascii.allocLowerString(frame.local_arena, token);
     for (supported) |s| {
         if (std.mem.eql(u8, lower, s)) return true;
