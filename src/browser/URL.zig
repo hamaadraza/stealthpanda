@@ -43,6 +43,15 @@ pub fn resolve(
         U.url_resolve_without_encoding(base.ptr, base.len, path.ptr, path.len, &err);
 
     if (err != 0) {
+        // stealthpanda: the native resolver rejects a relative reference resolved
+        // against a blob: base. A blob: URL's "path" is itself a URL
+        // (blob:https://example.com/uuid), and a blob worker's relative fetch /
+        // `new URL("/x", location.href)` resolve against that inner URL. Retry
+        // against it so worker `fetch("/api")` works (anti-bot SDKs rely on it).
+        // Fallback-on-failure only: cases that already resolve are untouched.
+        if (std.mem.startsWith(u8, base, "blob:")) {
+            return resolve(allocator, base["blob:".len..], source_path, options);
+        }
         return error.TypeError;
     }
     defer href.deinit();
@@ -64,7 +73,13 @@ pub fn resolveNavigation(allocator: Allocator, url: []const u8, options: Resolve
 
 pub fn canParse(url: []const u8, maybe_base: ?[]const u8) bool {
     if (maybe_base) |base| {
-        return U.url_can_parse_with_base(base.ptr, base.len, url.ptr, url.len);
+        if (U.url_can_parse_with_base(base.ptr, base.len, url.ptr, url.len)) return true;
+        // stealthpanda: a blob: base resolves against its inner URL (see resolve).
+        if (std.mem.startsWith(u8, base, "blob:")) {
+            const inner = base["blob:".len..];
+            return U.url_can_parse_with_base(inner.ptr, inner.len, url.ptr, url.len);
+        }
+        return false;
     }
     return U.url_can_parse(url.ptr, url.len);
 }
@@ -288,6 +303,16 @@ pub fn getHash(raw: [:0]const u8) []const u8 {
 }
 
 pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
+    // A blob: URL inherits the origin of the URL embedded after "blob:"
+    // (blob:https://example.com/uuid -> https://example.com), per the URL spec.
+    // stealthpanda: without this a blob-worker's self.location.origin is "null",
+    // and worker code that builds fetch/XHR URLs from location.origin (as
+    // anti-bot SDKs do) fails with "Failed to construct Request", stalling the
+    // whole worker pipeline.
+    if (std.mem.startsWith(u8, raw, "blob:")) {
+        return getOrigin(allocator, raw["blob:".len..]);
+    }
+
     const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return null;
 
     // Only HTTP and HTTPS schemes have origins

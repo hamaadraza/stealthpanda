@@ -44,7 +44,16 @@ pub fn init(url: []const u8, maybe_base: ?[]const u8, exec: *const Execution) !*
     var err: i32 = 0;
     const u = blk: {
         if (maybe_base) |base| {
-            break :blk U.url_parse_with_base(base.ptr, base.len, url.ptr, url.len, &err) orelse return error.TypeError;
+            if (U.url_parse_with_base(base.ptr, base.len, url.ptr, url.len, &err)) |parsed| break :blk parsed;
+            // stealthpanda: retry a blob: base against its inner URL, so
+            // `new URL("/x", self.location.href)` works inside a blob worker
+            // (see ../URL.zig resolve). Anti-bot SDKs build request URLs this way.
+            if (std.mem.startsWith(u8, base, "blob:")) {
+                const inner = base["blob:".len..];
+                err = 0;
+                break :blk U.url_parse_with_base(inner.ptr, inner.len, url.ptr, url.len, &err) orelse return error.TypeError;
+            }
+            return error.TypeError;
         }
         break :blk U.url_parse(url.ptr, url.len, &err) orelse return error.TypeError;
     };
