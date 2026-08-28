@@ -4,20 +4,30 @@
 //! Zig binding to the Rust software canvas-2D rasterizer
 //! (src/html5ever/stealthpanda_canvas.rs, linked into the same staticlib as
 //! html5ever). The 2D context records draw operations into a compact
-//! little-endian byte stream using the `Op` opcodes below; `renderPng` hands
-//! that stream to Rust (tiny-skia) and returns real PNG bytes.
+//! little-endian byte stream using the `Op` opcodes below; `render` hands that
+//! stream to Rust (tiny-skia) and returns real encoded image bytes (PNG, JPEG
+//! or WebP per the requested `ImageFormat`).
 
 const std = @import("std");
 
-extern "c" fn lp_canvas_render_png(
+extern "c" fn lp_canvas_render(
     ops_ptr: ?[*]const u8,
     ops_len: usize,
     w: u32,
     h: u32,
+    format: u8,
     out_len: *usize,
 ) ?[*]u8;
 extern "c" fn lp_canvas_free(ptr: ?[*]u8, len: usize) void;
 extern "c" fn lp_canvas_measure_text(ptr: ?[*]const u8, len: usize, px: f32) f32;
+
+/// Output image format (must match the `format` dispatch in
+/// stealthpanda_canvas.rs `lp_canvas_render`).
+pub const ImageFormat = enum(u8) {
+    png = 0,
+    jpeg = 1,
+    webp = 2,
+};
 
 /// textBaseline codes (must match stealthpanda_canvas.rs).
 pub const Baseline = enum(u8) {
@@ -55,15 +65,17 @@ pub const Op = enum(u8) {
     fill_text = 0x10,
 };
 
-/// Renders the recorded op stream to a PNG, returning bytes owned by
-/// `allocator` (a copy of the Rust-owned buffer), or null on failure.
-pub fn renderPng(allocator: std.mem.Allocator, ops: []const u8, w: u32, h: u32) !?[]u8 {
+/// Renders the recorded op stream to the requested image `format`, returning
+/// bytes owned by `allocator` (a copy of the Rust-owned buffer), or null on
+/// failure.
+pub fn render(allocator: std.mem.Allocator, ops: []const u8, w: u32, h: u32, format: ImageFormat) !?[]u8 {
     var out_len: usize = 0;
-    const ptr = lp_canvas_render_png(
+    const ptr = lp_canvas_render(
         if (ops.len == 0) null else ops.ptr,
         ops.len,
         w,
         h,
+        @intFromEnum(format),
         &out_len,
     ) orelse return null;
     defer lp_canvas_free(ptr, out_len);

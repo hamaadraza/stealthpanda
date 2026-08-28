@@ -149,24 +149,29 @@ pub fn toDataURL(self: *const Canvas, mime: ?[]const u8, _: ?f64, exec: *Executi
     return if (self.hasBitmap()) BlankPNG.data_url else "data:,";
 }
 
-// stealthpanda: the data-URL prefix for a requested image MIME. Chrome supports
-// PNG/JPEG/WebP export; our rasterizer only produces PNG bytes, but honouring
-// the requested MIME in the label keeps `toDataURL("image/jpeg")` /
-// `("image/webp")` feature probes true (they check the `data:image/<type>`
-// prefix). Anything else falls back to PNG, exactly as Chrome does. The bytes
-// under a jpeg/webp label are still PNG — a byte-level residual, same class as
-// the canvas image-hash residual (see .ai/FORK.md).
-fn dataUrlPrefix(mime: ?[]const u8) []const u8 {
-    const m = mime orelse return "data:image/png;base64,";
-    if (std.ascii.eqlIgnoreCase(m, "image/jpeg")) return "data:image/jpeg;base64,";
-    if (std.ascii.eqlIgnoreCase(m, "image/webp")) return "data:image/webp;base64,";
-    return "data:image/png;base64,";
+// stealthpanda: map a requested image MIME to the rasterizer's output format and
+// the matching data-URL prefix. Chrome supports PNG/JPEG/WebP export, and the
+// Rust rasterizer now emits real bytes for each (so the payload matches its
+// label, not just the prefix); anything else falls back to PNG, exactly as
+// Chrome does.
+const canvas_raster = @import("../../../../stealthpanda/canvas_raster.zig");
+fn imageFormat(mime: ?[]const u8) canvas_raster.ImageFormat {
+    const m = mime orelse return .png;
+    if (std.ascii.eqlIgnoreCase(m, "image/jpeg")) return .jpeg;
+    if (std.ascii.eqlIgnoreCase(m, "image/webp")) return .webp;
+    return .png;
+}
+fn dataUrlPrefix(format: canvas_raster.ImageFormat) []const u8 {
+    return switch (format) {
+        .png => "data:image/png;base64,",
+        .jpeg => "data:image/jpeg;base64,",
+        .webp => "data:image/webp;base64,",
+    };
 }
 
 // stealthpanda: rasterize the 2D context's op stream to a PNG data URL, or null
 // to fall back (0-sized canvas, WebGL context, or a render error).
 fn renderDataURL(self: *const Canvas, mime: ?[]const u8, exec: *Execution) !?[]const u8 {
-    const canvas_raster = @import("../../../../stealthpanda/canvas_raster.zig");
     const w = self.getWidth();
     const h = self.getHeight();
     if (w == 0 or h == 0) return null;
@@ -176,12 +181,13 @@ fn renderDataURL(self: *const Canvas, mime: ?[]const u8, exec: *Execution) !?[]c
         .webgl, .webgl2 => return null,
     } else &.{};
 
-    const png = (try canvas_raster.renderPng(exec.local_arena, draw_ops, w, h)) orelse return null;
+    const format = imageFormat(mime);
+    const image = (try canvas_raster.render(exec.local_arena, draw_ops, w, h, format)) orelse return null;
     const enc = std.base64.standard.Encoder;
-    const prefix = dataUrlPrefix(mime);
-    const out = try exec.local_arena.alloc(u8, prefix.len + enc.calcSize(png.len));
+    const prefix = dataUrlPrefix(format);
+    const out = try exec.local_arena.alloc(u8, prefix.len + enc.calcSize(image.len));
     @memcpy(out[0..prefix.len], prefix);
-    _ = enc.encode(out[prefix.len..], png);
+    _ = enc.encode(out[prefix.len..], image);
     return out;
 }
 

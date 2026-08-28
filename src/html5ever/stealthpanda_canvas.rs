@@ -204,14 +204,59 @@ fn render(ops: &[u8], w: u32, h: u32) -> Option<Pixmap> {
     Some(pixmap)
 }
 
-/// Renders the op stream to a PNG. Returns a heap pointer (length in `out_len`)
-/// that the caller must release with `lp_canvas_free`, or null on failure.
+// stealthpanda: real JPEG encoder. JPEG has no alpha and canvas serialization
+// composites over black; tiny-skia stores premultiplied RGBA, and premultiplied-
+// over-black equals the stored RGB, so the premultiplied channels go straight
+// out. Chrome's default canvas JPEG quality is ~0.92.
+fn encode_jpeg(pixmap: &Pixmap) -> Option<Vec<u8>> {
+    use jpeg_encoder::{ColorType, Encoder};
+    let w = u16::try_from(pixmap.width()).ok()?;
+    let h = u16::try_from(pixmap.height()).ok()?;
+    let mut rgb = Vec::with_capacity(pixmap.width() as usize * pixmap.height() as usize * 3);
+    for px in pixmap.pixels() {
+        rgb.push(px.red());
+        rgb.push(px.green());
+        rgb.push(px.blue());
+    }
+    let mut buf = Vec::new();
+    Encoder::new(&mut buf, 92)
+        .encode(&rgb, w, h, ColorType::Rgb)
+        .ok()?;
+    Some(buf)
+}
+
+// stealthpanda: real (lossless) WebP encoder. WebP keeps alpha, so demultiply
+// tiny-skia's premultiplied pixels back to straight RGBA.
+fn encode_webp(pixmap: &Pixmap) -> Option<Vec<u8>> {
+    use image_webp::{ColorType, WebPEncoder};
+    let w = pixmap.width();
+    let h = pixmap.height();
+    let mut rgba = Vec::with_capacity(w as usize * h as usize * 4);
+    for px in pixmap.pixels() {
+        let c = px.demultiply();
+        rgba.push(c.red());
+        rgba.push(c.green());
+        rgba.push(c.blue());
+        rgba.push(c.alpha());
+    }
+    let mut buf = Vec::new();
+    WebPEncoder::new(&mut buf)
+        .encode(&rgba, w, h, ColorType::Rgba8)
+        .ok()?;
+    Some(buf)
+}
+
+/// Renders the op stream and encodes it as `format` (0 = PNG, 1 = JPEG,
+/// 2 = WebP — must match canvas_raster.zig ImageFormat). Returns a heap pointer
+/// (length in `out_len`) that the caller must release with `lp_canvas_free`, or
+/// null on failure.
 #[no_mangle]
-pub extern "C" fn lp_canvas_render_png(
+pub extern "C" fn lp_canvas_render(
     ops_ptr: *const u8,
     ops_len: usize,
     w: u32,
     h: u32,
+    format: u8,
     out_len: *mut usize,
 ) -> *mut u8 {
     let ops: &[u8] = if ops_ptr.is_null() || ops_len == 0 {
@@ -228,15 +273,21 @@ pub extern "C" fn lp_canvas_render_png(
         }
     };
 
-    match pixmap.encode_png() {
-        Ok(bytes) => {
+    let encoded = match format {
+        1 => encode_jpeg(&pixmap),
+        2 => encode_webp(&pixmap),
+        _ => pixmap.encode_png().ok(),
+    };
+
+    match encoded {
+        Some(bytes) => {
             let boxed = bytes.into_boxed_slice();
             let len = boxed.len();
             let ptr = Box::into_raw(boxed) as *mut u8;
             unsafe { *out_len = len };
             ptr
         }
-        Err(_) => {
+        None => {
             unsafe { *out_len = 0 };
             std::ptr::null_mut()
         }
@@ -274,7 +325,7 @@ pub extern "C" fn lp_canvas_measure_text(ptr: *const u8, len: usize, px: f32) ->
     w
 }
 
-/// Frees a buffer returned by `lp_canvas_render_png`.
+/// Frees a buffer returned by `lp_canvas_render`.
 #[no_mangle]
 pub extern "C" fn lp_canvas_free(ptr: *mut u8, len: usize) {
     if ptr.is_null() || len == 0 {
