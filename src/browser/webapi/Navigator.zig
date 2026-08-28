@@ -35,6 +35,8 @@ const BatteryManager = @import("BatteryManager.zig");
 const Bluetooth = @import("Bluetooth.zig");
 const Features = @import("Features.zig");
 const GPU = @import("GPU.zig");
+const MediaCapabilities = @import("MediaCapabilities.zig");
+const Keyboard = @import("Keyboard.zig");
 
 const Navigator = @This();
 
@@ -42,7 +44,7 @@ comptime {
     // Ensure we don't cause an identity map conflict. Because _geolocation is
     // lazy and, for now, Zig orders the highest-aligned field first, none of
     // the other fields land at offset 0.
-    for ([_][]const u8{ "_plugins", "_mime_types", "_connection", "_media_devices", "_battery", "_bluetooth", "_service_worker", "_storage_quota", "_permissions", "_storage", "_ua_data", "_gpu" }) |name| {
+    for ([_][]const u8{ "_plugins", "_mime_types", "_connection", "_media_devices", "_battery", "_bluetooth", "_service_worker", "_storage_quota", "_permissions", "_storage", "_ua_data", "_gpu", "_media_capabilities", "_keyboard" }) |name| {
         if (@offsetOf(Navigator, name) == 0) @compileError(name ++ " aliases the Navigator");
     }
 }
@@ -64,6 +66,10 @@ _battery: BatteryManager = .{},
 _bluetooth: Bluetooth = .{},
 // stealthpanda: navigator.gpu (WebGPU entry point, impersonation-gated).
 _gpu: GPU = .{},
+// stealthpanda: navigator.mediaCapabilities / navigator.keyboard
+// (impersonation-gated modern-Chrome APIs a bot sensor probes).
+_media_capabilities: MediaCapabilities = .{},
+_keyboard: Keyboard = .{},
 // stealthpanda: navigator.serviceWorker / legacy webkit*Storage quota objects
 // (impersonation-gated). Shared singletons, like the other stub sub-objects.
 _service_worker: Features.ServiceWorkerContainer = .{},
@@ -239,6 +245,19 @@ pub fn getMediaDevices(self: *Navigator, exec: *const Execution) ?*MediaDevices 
 pub fn getGpu(self: *Navigator, exec: *const Execution) ?*GPU {
     if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
     return &self._gpu;
+}
+
+// stealthpanda: navigator.mediaCapabilities / navigator.keyboard — present only
+// when impersonating (undefined otherwise). Both are probed by the Turnstile
+// attestation; absence under a Chrome UA is a bot signal.
+pub fn getMediaCapabilities(self: *Navigator, exec: *const Execution) ?*MediaCapabilities {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return &self._media_capabilities;
+}
+
+pub fn getKeyboard(self: *Navigator, exec: *const Execution) ?*Keyboard {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return &self._keyboard;
 }
 
 // stealthpanda: navigator.getBattery() — resolves the shared BatteryManager
@@ -426,6 +445,8 @@ pub const JsApi = struct {
     pub const connection = bridge.accessor(Navigator.getConnection, null, .{ .null_as_undefined = true });
     pub const mediaDevices = bridge.accessor(Navigator.getMediaDevices, null, .{ .null_as_undefined = true });
     pub const gpu = bridge.accessor(Navigator.getGpu, null, .{ .null_as_undefined = true });
+    pub const mediaCapabilities = bridge.accessor(Navigator.getMediaCapabilities, null, .{ .null_as_undefined = true });
+    pub const keyboard = bridge.accessor(Navigator.getKeyboard, null, .{ .null_as_undefined = true });
     // stealthpanda: navigator.getBattery() / navigator.bluetooth (bluetooth
     // undefined off-path).
     pub const getBattery = bridge.function(Navigator.getBattery, .{});

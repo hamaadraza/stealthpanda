@@ -31,6 +31,7 @@ const Navigator = @import("Navigator.zig");
 const ModelContext = @import("ModelContext.zig");
 const Screen = @import("Screen.zig");
 const Chrome = @import("Chrome.zig");
+const TrustedTypes = @import("TrustedTypes.zig");
 const SpeechSynthesis = @import("SpeechSynthesis.zig");
 const VisualViewport = @import("VisualViewport.zig");
 const Performance = @import("Performance.zig");
@@ -76,6 +77,8 @@ _navigator: Navigator = .init,
 _model_context: ModelContext = .init,
 // stealthpanda: window.chrome, only surfaced when impersonating (getChrome).
 _chrome: Chrome = .{},
+// stealthpanda: window.trustedTypes (impersonation-gated).
+_trusted_types: TrustedTypes.TrustedTypePolicyFactory = .{},
 // stealthpanda: window.speechSynthesis, only surfaced when impersonating.
 _speech_synthesis: SpeechSynthesis = .{},
 _screen: *Screen,
@@ -270,6 +273,20 @@ pub fn getScreen(self: *Window) *Screen {
 pub fn getChrome(self: *Window, exec: *const Execution) ?*Chrome {
     if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
     return &self._chrome;
+}
+
+// stealthpanda: window.clientInformation — Chrome's read-only alias of
+// window.navigator. Present only when impersonating (undefined off-path).
+pub fn getClientInformation(self: *Window, exec: *const Execution) ?*Navigator {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return &self._navigator;
+}
+
+// stealthpanda: window.trustedTypes — present only when impersonating (a Chrome
+// UA without it is a bot signal; the Turnstile attestation probes it).
+pub fn getTrustedTypes(self: *Window, exec: *const Execution) ?*TrustedTypes.TrustedTypePolicyFactory {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return &self._trusted_types;
 }
 
 // stealthpanda: window.speechSynthesis — present only when impersonating (an
@@ -1242,6 +1259,8 @@ pub const JsApi = struct {
     pub const screen = bridge.accessor(Window.getScreen, Window.setScreen, .{});
     // stealthpanda: window.chrome (undefined unless impersonating).
     pub const chrome = bridge.accessor(Window.getChrome, null, .{ .null_as_undefined = true });
+    pub const clientInformation = bridge.accessor(Window.getClientInformation, null, .{ .null_as_undefined = true });
+    pub const trustedTypes = bridge.accessor(Window.getTrustedTypes, null, .{ .null_as_undefined = true });
     // stealthpanda: window.speechSynthesis (undefined unless impersonating).
     pub const speechSynthesis = bridge.accessor(Window.getSpeechSynthesis, null, .{ .null_as_undefined = true });
     // stealthpanda: window.webkitRequestFileSystem (legacy Filesystem API entry).

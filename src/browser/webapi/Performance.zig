@@ -372,6 +372,23 @@ pub fn scheduleDelivery(self: *Performance, exec: *const Execution) !void {
     );
 }
 
+// stealthpanda: performance.memory (Chrome's non-standard MemoryInfo). Desktop
+// Chrome always exposes it; its absence under a Chrome user-agent is a classic
+// headless tell, and the Cloudflare Turnstile attestation probes it. Values are
+// a plausible loaded-page snapshot, rounded to Chrome's 100 KB granularity, and
+// satisfy used < total < limit. Only surfaced when impersonating (undefined
+// otherwise, keeping the off-path build byte-identical to upstream).
+const MemoryInfo = struct {
+    jsHeapSizeLimit: u64 = 4294705152,
+    totalJSHeapSize: u64 = 35000000,
+    usedJSHeapSize: u64 = 19100000,
+};
+
+pub fn getMemory(_: *Performance, exec: *const Execution) ?MemoryInfo {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return .{};
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Performance);
 
@@ -394,6 +411,7 @@ pub const JsApi = struct {
     pub const timing = bridge.accessor(Performance.getTiming, null, .{ .exposed = .window });
     pub const navigation = bridge.accessor(Performance.getNavigation, null, .{ .exposed = .window });
     pub const eventCounts = bridge.accessor(Performance.getEventCounts, null, .{ .exposed = .window });
+    pub const memory = bridge.accessor(Performance.getMemory, null, .{ .null_as_undefined = true });
 };
 
 pub const Entry = struct {
