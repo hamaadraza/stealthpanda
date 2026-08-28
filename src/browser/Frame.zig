@@ -3085,7 +3085,13 @@ pub fn updateRangesForNodeRemoval(self: *Frame, parent: *Node, child: *Node, chi
 // containing scripts must execute them all, after the whole insertion.
 fn nodeIsReadySubtree(self: *Frame, node: *Node) !void {
     if (node._type != .element or node.firstChild() == null) {
-        return self.nodeIsReady(false, node);
+        try self.nodeIsReady(false, node);
+        // stealthpanda: a leaf element can still host a shadow tree with no
+        // light children (e.g. the Cloudflare Turnstile widget's closed shadow
+        // root, whose host div has none) containing an <iframe> that must
+        // navigate when the host connects.
+        if (node._type == .element) try self.navigateShadowFrames(node);
+        return;
     }
 
     // Scripts can mutate the tree. Safe to do this since nodeIsReady re-checks
@@ -3097,6 +3103,37 @@ fn nodeIsReadySubtree(self: *Frame, node: *Node) !void {
     }
     for (elements.items) |el| {
         try self.nodeIsReady(false, el);
+    }
+    // stealthpanda: the walk above stays in light DOM; navigate iframes built
+    // inside any shadow tree hosted under this subtree.
+    try self.navigateShadowFrames(node);
+}
+
+// stealthpanda: iframes that live inside a shadow tree never received their
+// ready-work (navigation) when the host connected, because every light-DOM
+// walker stops at the shadow boundary. Cloudflare Turnstile builds its widget
+// <iframe> inside a closed shadow root and only then attaches the host, so the
+// widget iframe never loaded. Scan `root`'s light DOM for shadow hosts and, in
+// each hosted shadow tree, navigate every iframe (recursing through nested
+// shadow trees). Scoped to iframes so shadow-tree script/style/link timing is
+// unchanged; iframeAddedCallback's `_executed` guard makes re-entry a no-op.
+fn navigateShadowFrames(self: *Frame, root: *Node) !void {
+    var tw = TreeWalker.Full.Elements.init(root, .{});
+    while (tw.next()) |el| {
+        const shadow = el.hostedShadowRoot(self) orelse continue;
+        try self.navigateFramesInShadow(shadow.asNode());
+    }
+}
+
+fn navigateFramesInShadow(self: *Frame, shadow_root: *Node) !void {
+    var tw = TreeWalker.Full.Elements.init(shadow_root, .{});
+    while (tw.next()) |el| {
+        if (el.asNode().is(IFrame)) |iframe| {
+            try self.iframeAddedCallback(iframe);
+        }
+        if (el.hostedShadowRoot(self)) |nested| {
+            try self.navigateFramesInShadow(nested.asNode());
+        }
     }
 }
 

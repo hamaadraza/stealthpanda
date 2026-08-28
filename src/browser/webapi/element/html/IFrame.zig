@@ -69,15 +69,10 @@ pub fn getSrc(self: *IFrame, frame: *Frame) ![]const u8 {
 }
 
 pub fn setSrc(self: *IFrame, src: []const u8, frame: *Frame) !void {
-    const element = self.asElement();
-    try element.setAttributeSafe(comptime .wrap("src"), .wrap(src), frame);
-    self._src = element.getAttributeSafe(comptime .wrap("src")) orelse unreachable;
-    if (element.asNode().isConnected()) {
-        // unlike script, an iframe is reloaded every time the src is set
-        // even if it's set to the same URL.
-        self._executed = false;
-        try frame.iframeAddedCallback(self);
-    }
+    // Setting the src attribute drives (re)navigation through
+    // Build.attributeChange, so the `.src =` property and
+    // `setAttribute("src", ...)` behave identically (mirrors Script.setSrc).
+    try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(src), frame);
 }
 
 pub fn hasSrcdoc(self: *IFrame) bool {
@@ -138,12 +133,21 @@ pub const Build = struct {
     }
 
     pub fn attributeChange(element: *Element, name: String, _: String, frame: *Frame) !void {
-        if (!name.eql(comptime .wrap("srcdoc"))) {
+        // `src` was previously handled only by the `.src =` property setter, so
+        // `iframe.setAttribute("src", ...)` on an already-connected iframe never
+        // navigated (a real browser reloads it). Handle both here, mirroring
+        // Script.attributeChange, so every src-mutation path navigates.
+        const is_src = name.eql(comptime .wrap("src"));
+        if (!is_src and !name.eql(comptime .wrap("srcdoc"))) {
             return;
         }
+        const self = element.as(IFrame);
+        if (is_src) {
+            self._src = element.getAttributeSafe(comptime .wrap("src")) orelse "";
+        }
         if (element.asNode().isConnected()) {
-            // like src, setting srcdoc reloads the frame even if the value didn't change
-            const self = element.as(IFrame);
+            // an iframe is reloaded every time src/srcdoc is set, even to the
+            // same value.
             self._executed = false;
             try frame.iframeAddedCallback(self);
         }
