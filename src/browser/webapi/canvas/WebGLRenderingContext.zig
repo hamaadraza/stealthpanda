@@ -330,6 +330,18 @@ pub fn getDrawingBufferHeight(self: *const WebGLRenderingContext) u32 {
     return 0;
 }
 
+// stealthpanda: gl.drawingBufferColorSpace / gl.unpackColorSpace — settable
+// color-space properties Chrome exposes on the WebGL context (default "srgb").
+// A Chrome context missing them is a tell; the setters are no-ops.
+pub fn getDrawingBufferColorSpace(_: *const WebGLRenderingContext) []const u8 {
+    return "srgb";
+}
+pub fn setDrawingBufferColorSpace(_: *WebGLRenderingContext, _: []const u8) void {}
+pub fn getUnpackColorSpace(_: *const WebGLRenderingContext) []const u8 {
+    return "srgb";
+}
+pub fn setUnpackColorSpace(_: *WebGLRenderingContext, _: []const u8) void {}
+
 // Handle factories — the render code chains these objects but never inspects
 // them, so an opaque instance per call is enough.
 pub fn createShader(_: *const WebGLRenderingContext, _: js.Value, frame: *Frame) !*WebGLShader {
@@ -461,6 +473,8 @@ pub const JsApi = struct {
     pub const canvas = bridge.accessor(WebGLRenderingContext.getCanvas, null, .{});
     pub const drawingBufferWidth = bridge.accessor(WebGLRenderingContext.getDrawingBufferWidth, null, .{});
     pub const drawingBufferHeight = bridge.accessor(WebGLRenderingContext.getDrawingBufferHeight, null, .{});
+    pub const drawingBufferColorSpace = bridge.accessor(WebGLRenderingContext.getDrawingBufferColorSpace, WebGLRenderingContext.setDrawingBufferColorSpace, .{});
+    pub const unpackColorSpace = bridge.accessor(WebGLRenderingContext.getUnpackColorSpace, WebGLRenderingContext.setUnpackColorSpace, .{});
 
     // stealthpanda: WebGL render stubs (return values).
     pub const createShader = bridge.function(WebGLRenderingContext.createShader, .{});

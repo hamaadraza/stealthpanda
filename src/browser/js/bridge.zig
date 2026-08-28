@@ -1234,6 +1234,7 @@ pub const PageJsApis = flattenTypes(&.{
     @import("../webapi/navigation/NavigationActivation.zig"),
     @import("../webapi/canvas/CanvasRenderingContext2D.zig"),
     @import("../webapi/canvas/WebGLRenderingContext.zig"),
+    @import("../webapi/canvas/WebGL2RenderingContext.zig"),
     @import("../webapi/canvas/OffscreenCanvas.zig"),
     @import("../webapi/canvas/OffscreenCanvasRenderingContext2D.zig"),
     @import("../webapi/SubtleCrypto.zig"),
@@ -1310,6 +1311,7 @@ const worker_common_apis = [_]type{
     // inconsistency between the two is a bot tell — deviceandbrowserinfo's
     // hasInconsistentWorkerValues).
     @import("../webapi/canvas/WebGLRenderingContext.zig"),
+    @import("../webapi/canvas/WebGL2RenderingContext.zig"),
     @import("../webapi/net/XMLHttpRequest.zig"),
     @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
     @import("../webapi/net/XMLHttpRequestUpload.zig"),

@@ -22,6 +22,7 @@ const js = @import("../../js/js.zig");
 const Blob = @import("../Blob.zig");
 const OffscreenCanvasRenderingContext2D = @import("OffscreenCanvasRenderingContext2D.zig");
 const WebGLRenderingContext = @import("WebGLRenderingContext.zig");
+const WebGL2RenderingContext = @import("WebGL2RenderingContext.zig");
 
 const Execution = js.Execution;
 
@@ -38,6 +39,7 @@ _height: u32,
 const DrawingContext = union(enum) {
     @"2d": *OffscreenCanvasRenderingContext2D,
     webgl: *WebGLRenderingContext,
+    webgl2: *WebGL2RenderingContext,
 };
 
 pub fn constructor(width: u32, height: u32, exec: *Execution) !*OffscreenCanvas {
@@ -82,6 +84,18 @@ pub fn getContext(self: *OffscreenCanvas, context_type: []const u8, exec: *Execu
             ._offscreen = self,
         });
         return .{ .webgl = ctx };
+    }
+
+    // stealthpanda: WebGL2 in a worker OffscreenCanvas — keep the worker's
+    // context surface consistent with the main thread (which now serves webgl2),
+    // else the main-vs-worker mismatch is itself a tell.
+    if (std.mem.eql(u8, context_type, "webgl2")) {
+        if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+        const ctx = try exec._factory.create(WebGL2RenderingContext{ ._gl = .{
+            ._seed = @intFromPtr(exec.session),
+            ._offscreen = self,
+        } });
+        return .{ .webgl2 = ctx };
     }
 
     return null;

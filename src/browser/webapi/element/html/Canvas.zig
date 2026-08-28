@@ -28,6 +28,7 @@ const Element = @import("../../Element.zig");
 
 const OffscreenCanvas = @import("../../canvas/OffscreenCanvas.zig");
 const WebGLRenderingContext = @import("../../canvas/WebGLRenderingContext.zig");
+const WebGL2RenderingContext = @import("../../canvas/WebGL2RenderingContext.zig");
 const CanvasRenderingContext2D = @import("../../canvas/CanvasRenderingContext2D.zig");
 
 const HtmlElement = @import("../Html.zig");
@@ -68,13 +69,18 @@ pub fn getHeight(self: *const Canvas) u32 {
 const DrawingContext = union(enum) {
     @"2d": *CanvasRenderingContext2D,
     webgl: *WebGLRenderingContext,
+    // stealthpanda: canvas.getContext("webgl2"). A distinct type from `webgl`:
+    // a canvas bound to one context type returns null for the other, and
+    // WebGL2RenderingContext is not a WebGLRenderingContext (see that file).
+    webgl2: *WebGL2RenderingContext,
 };
 
 pub fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?DrawingContext {
     if (self._cached) |cached| {
         const matches = switch (cached) {
             .@"2d" => std.mem.eql(u8, context_type, "2d"),
-            .webgl => std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl") or std.mem.eql(u8, context_type, "webgl2"),
+            .webgl => std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl"),
+            .webgl2 => std.mem.eql(u8, context_type, "webgl2"),
         };
         return if (matches) cached else null;
     }
@@ -100,8 +106,7 @@ pub fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?Draw
         // Chrome's GPU via getParameter). We accept the Three.js-breakage
         // trade-off only in stealth mode; off-path stays null.
         if (std.mem.eql(u8, context_type, "webgl") or
-            std.mem.eql(u8, context_type, "experimental-webgl") or
-            std.mem.eql(u8, context_type, "webgl2"))
+            std.mem.eql(u8, context_type, "experimental-webgl"))
         {
             if (frame._session.browser.http_client.impersonateIdentity() == null) {
                 return null;
@@ -110,6 +115,17 @@ pub fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?Draw
             // (stable within a session, varies across launches via ASLR).
             const ctx = try frame._factory.create(WebGLRenderingContext{ ._seed = @intFromPtr(frame._session), ._canvas = self });
             break :blk .{ .webgl = ctx };
+        }
+
+        // stealthpanda: WebGL2 — Chrome exposes it, so a null under a Chrome UA
+        // is a tell. The context mirrors the WebGL1 report/param spoof plus the
+        // WebGL2 surface (see WebGL2RenderingContext.zig). Same seed source.
+        if (std.mem.eql(u8, context_type, "webgl2")) {
+            if (frame._session.browser.http_client.impersonateIdentity() == null) {
+                return null;
+            }
+            const ctx = try frame._factory.create(WebGL2RenderingContext{ ._gl = .{ ._seed = @intFromPtr(frame._session), ._canvas = self } });
+            break :blk .{ .webgl2 = ctx };
         }
         return null;
     };
@@ -157,7 +173,7 @@ fn renderDataURL(self: *const Canvas, mime: ?[]const u8, exec: *Execution) !?[]c
 
     const draw_ops: []const u8 = if (self._cached) |cached| switch (cached) {
         .@"2d" => |ctx| ctx.ops(),
-        .webgl => return null,
+        .webgl, .webgl2 => return null,
     } else &.{};
 
     const png = (try canvas_raster.renderPng(exec.local_arena, draw_ops, w, h)) orelse return null;
