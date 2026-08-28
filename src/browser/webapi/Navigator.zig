@@ -34,6 +34,7 @@ const MediaDevices = @import("MediaDevices.zig");
 const BatteryManager = @import("BatteryManager.zig");
 const Bluetooth = @import("Bluetooth.zig");
 const Features = @import("Features.zig");
+const GPU = @import("GPU.zig");
 
 const Navigator = @This();
 
@@ -41,7 +42,7 @@ comptime {
     // Ensure we don't cause an identity map conflict. Because _geolocation is
     // lazy and, for now, Zig orders the highest-aligned field first, none of
     // the other fields land at offset 0.
-    for ([_][]const u8{ "_plugins", "_mime_types", "_connection", "_media_devices", "_battery", "_bluetooth", "_service_worker", "_storage_quota", "_permissions", "_storage", "_ua_data" }) |name| {
+    for ([_][]const u8{ "_plugins", "_mime_types", "_connection", "_media_devices", "_battery", "_bluetooth", "_service_worker", "_storage_quota", "_permissions", "_storage", "_ua_data", "_gpu" }) |name| {
         if (@offsetOf(Navigator, name) == 0) @compileError(name ++ " aliases the Navigator");
     }
 }
@@ -61,6 +62,8 @@ _media_devices: MediaDevices = .{},
 // stealthpanda: navigator.getBattery() singleton / navigator.bluetooth.
 _battery: BatteryManager = .{},
 _bluetooth: Bluetooth = .{},
+// stealthpanda: navigator.gpu (WebGPU entry point, impersonation-gated).
+_gpu: GPU = .{},
 // stealthpanda: navigator.serviceWorker / legacy webkit*Storage quota objects
 // (impersonation-gated). Shared singletons, like the other stub sub-objects.
 _service_worker: Features.ServiceWorkerContainer = .{},
@@ -229,6 +232,13 @@ pub fn getConnection(self: *Navigator, exec: *const Execution) ?*NetworkInformat
 pub fn getMediaDevices(self: *Navigator, exec: *const Execution) ?*MediaDevices {
     if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
     return &self._media_devices;
+}
+
+// stealthpanda: navigator.gpu — present only when impersonating (undefined
+// otherwise). Absence under a Chrome user-agent is a well-known headless tell.
+pub fn getGpu(self: *Navigator, exec: *const Execution) ?*GPU {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return &self._gpu;
 }
 
 // stealthpanda: navigator.getBattery() — resolves the shared BatteryManager
@@ -415,6 +425,7 @@ pub const JsApi = struct {
     // stealthpanda: navigator.connection / navigator.mediaDevices (undefined off-path).
     pub const connection = bridge.accessor(Navigator.getConnection, null, .{ .null_as_undefined = true });
     pub const mediaDevices = bridge.accessor(Navigator.getMediaDevices, null, .{ .null_as_undefined = true });
+    pub const gpu = bridge.accessor(Navigator.getGpu, null, .{ .null_as_undefined = true });
     // stealthpanda: navigator.getBattery() / navigator.bluetooth (bluetooth
     // undefined off-path).
     pub const getBattery = bridge.function(Navigator.getBattery, .{});

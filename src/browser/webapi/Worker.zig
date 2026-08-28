@@ -55,6 +55,13 @@ _worker_scope: *DedicatedWorkerGlobalScope,
 _url: [:0]const u8,
 _type: WorkerType = .classic,
 _script_loaded: bool = false,
+// stealthpanda: set when the worker is terminated/torn down, so aborting its
+// in-flight script fetch does NOT fire a spurious `error` event on the Worker.
+// Real browsers: terminate() is silent (no error event) — only a genuine fetch
+// failure fires one. Anti-bot scripts (Cloudflare's managed challenge) create a
+// probe worker, terminate() it, and treat any `error` on it as a crash — so the
+// bogus "Abort" event was aborting the whole challenge.
+_terminated: bool = false,
 _script_arena: ?*lp.Arena = null,
 _script_buffer: std.ArrayList(u8) = .empty,
 _http_transfer: ?*Transfer = null,
@@ -143,6 +150,8 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
 // Called from Frame.deinit when the frame is destroyed, so we don't need to
 // remove from the frame's worker list.
 pub fn deinit(self: *Worker) void {
+    // stealthpanda: tearing down the worker — the abort must not fire `error`.
+    self._terminated = true;
     // No pending frame for workers, so we can abort all frames.
     if (self._http_transfer) |res| {
         res.abort(error.Abort);
@@ -286,7 +295,11 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._script_loaded = true;
     self._worker_scope.drainPendingMessages();
 
-    self.fireErrorEvent(@errorName(err), null);
+    // stealthpanda: a terminate()/teardown abort must be silent — real browsers
+    // don't fire `error` when the page terminates a worker.
+    if (!self._terminated) {
+        self.fireErrorEvent(@errorName(err), null);
+    }
 }
 
 fn releaseScriptArena(self: *Worker) void {
@@ -328,6 +341,9 @@ fn _fireErrorEvent(self: *Worker, message: []const u8, error_value: ?js.Value.Gl
 }
 
 pub fn terminate(self: *Worker) void {
+    // stealthpanda: mark terminated so the abort below stays silent (no `error`
+    // event) — matching real browsers.
+    self._terminated = true;
     // Abort any pending script fetch
     if (self._http_transfer) |resp| {
         resp.abort(error.Abort);

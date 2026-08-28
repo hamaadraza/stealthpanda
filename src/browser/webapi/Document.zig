@@ -38,6 +38,8 @@ const DOMImplementation = @import("DOMImplementation.zig");
 const StyleSheetList = @import("css/StyleSheetList.zig");
 const FontFaceSet = @import("css/FontFaceSet.zig");
 const Selection = @import("Selection.zig");
+// stealthpanda: document.featurePolicy (impersonation-gated).
+const FeaturePolicy = @import("FeaturePolicy.zig");
 const XPathResult = @import("XPathResult.zig");
 const XPathExpression = @import("XPathExpression.zig");
 
@@ -74,6 +76,8 @@ _script_created_parser: ?Parser.Streaming = null,
 _close_requested: bool = false,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .{ ._rc = .init(1) },
+// stealthpanda: document.featurePolicy stub (impersonation-gated, stateless).
+_feature_policy: FeaturePolicy = .{},
 // Ordered stack of currently-showing popovers
 _open_popovers: std.ArrayList(*Element) = .empty,
 
@@ -767,6 +771,14 @@ pub fn getFonts(self: *Document, frame: *Frame) !*FontFaceSet {
     fonts.acquireRef();
     self._fonts = fonts;
     return fonts;
+}
+
+// stealthpanda: document.featurePolicy — present only when impersonating
+// (undefined otherwise). Chrome always exposes it; scripts read it as a
+// Chrome-presence probe.
+pub fn getFeaturePolicy(self: *Document, exec: *const js.Execution) ?*FeaturePolicy {
+    if (exec.session.browser.http_client.impersonateIdentity() == null) return null;
+    return &self._feature_policy;
 }
 
 pub fn adoptNode(self: *Document, node: *Node, frame: *Frame) !*Node {
@@ -1551,6 +1563,7 @@ pub const JsApi = struct {
     pub const activeElement = bridge.accessor(Document.getActiveElement, null, .{});
     pub const styleSheets = bridge.accessor(Document.getStyleSheets, null, .{});
     pub const fonts = bridge.accessor(Document.getFonts, null, .{});
+    pub const featurePolicy = bridge.accessor(Document.getFeaturePolicy, null, .{ .null_as_undefined = true });
     pub const contentType = bridge.accessor(Document.getContentType, null, .{});
     pub const domain = bridge.accessor(Document.getDomain, Document.setDomain, .{});
     pub const cookie = bridge.accessor(Document.getCookie, Document.setCookie, .{});
